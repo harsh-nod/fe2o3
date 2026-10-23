@@ -73,7 +73,10 @@ impl Case {
     fn permits_ranked_only(self) -> bool {
         self.expectation == Expectation::InertCapture
             && self.scalar == Scalar::F32
-            && matches!(self.operation, Operation::Reduce | Operation::Inclusive | Operation::Exclusive)
+            && matches!(
+                self.operation,
+                Operation::Reduce | Operation::Inclusive | Operation::Exclusive
+            )
     }
 
     fn requires_ranked_only(self) -> bool {
@@ -146,7 +149,9 @@ impl Report {
             return Err("wave capture report lost its exact case or distinct outcome".into());
         }
         if case.requires_ranked_only() && self.ranked_only.is_none() {
-            return Err("observed gfx942 non-retained f32 ranked witness regressed to refusal".into());
+            return Err(
+                "observed gfx942 non-retained f32 ranked witness regressed to refusal".into(),
+            );
         }
         if let Some(ranked) = &self.ranked_only {
             if !case.permits_ranked_only()
@@ -158,7 +163,9 @@ impl Report {
                 || !ranked.checks_clean
                 || ranked.grants_artifact_or_launch_authority
             {
-                return Err("actual ranked-only outcome changed checks, custody or authority".into());
+                return Err(
+                    "actual ranked-only outcome changed checks, custody or authority".into(),
+                );
             }
         }
         if case.expectation == Expectation::InertCapture {
@@ -325,7 +332,9 @@ fn observe_capture(tcx: TyCtxt<'_>, case: Case) -> Result<Report, String> {
         Err(error) => return Err(format!("unexpected pre-materialization refusal: {error:?}")),
         Ok(ranked) => {
             if !case.permits_ranked_only() {
-                return Err("source outside the reviewed f32 collectives reached ranked checks".into());
+                return Err(
+                    "source outside the reviewed f32 collectives reached ranked checks".into(),
+                );
             }
             // Read the actual returned stage; no target lowering, artifact
             // publication or launch is performed by this source-capture test.
@@ -572,7 +581,10 @@ fn ranked_only_report_rejects_authority_dirty_checks_counts_and_mixed_outcomes()
             9 => report.case.scalar = Scalar::U32,
             _ => unreachable!(),
         }
-        assert!(report.validate(report.case).is_err(), "report fault {fault} accepted");
+        assert!(
+            report.validate(report.case).is_err(),
+            "report fault {fault} accepted"
+        );
     }
 }
 
@@ -599,9 +611,17 @@ fn observed_gfx942_nonretained_f32_reduction_keeps_actual_ranked_stage_requireme
     assert!(report.case.permits_ranked_only());
     assert!(report.case.requires_ranked_only());
     report.validate(report.case).unwrap();
-    report.ranked_only.as_mut().unwrap().grants_artifact_or_launch_authority = true;
+    report
+        .ranked_only
+        .as_mut()
+        .unwrap()
+        .grants_artifact_or_launch_authority = true;
     assert!(report.validate(report.case).is_err());
-    report.ranked_only.as_mut().unwrap().grants_artifact_or_launch_authority = false;
+    report
+        .ranked_only
+        .as_mut()
+        .unwrap()
+        .grants_artifact_or_launch_authority = false;
     for scalar in [Scalar::U32, Scalar::I32] {
         report.case.scalar = scalar;
         assert!(!report.case.permits_ranked_only());
@@ -626,9 +646,27 @@ fn observed_gfx942_nonretained_f32_reduction_keeps_actual_ranked_stage_requireme
 fn wave64_capture_cases_keep_scalar_scan_and_hostile_boundaries_distinct() {
     let cases = capture_cases();
     assert_eq!(cases.len(), 52);
-    assert_eq!(cases.iter().filter(|case| case.permits_ranked_only()).count(), 12);
-    assert_eq!(cases.iter().filter(|case| case.requires_ranked_only()).count(), 2);
-    assert_eq!(cases.iter().filter(|case| case.expectation != Expectation::InertCapture).count(), 16);
+    assert_eq!(
+        cases
+            .iter()
+            .filter(|case| case.permits_ranked_only())
+            .count(),
+        12
+    );
+    assert_eq!(
+        cases
+            .iter()
+            .filter(|case| case.requires_ranked_only())
+            .count(),
+        2
+    );
+    assert_eq!(
+        cases
+            .iter()
+            .filter(|case| case.expectation != Expectation::InertCapture)
+            .count(),
+        16
+    );
     let mut identities = std::collections::BTreeSet::new();
     for case in cases {
         assert!(identities.insert(serde_json::to_string(&case).unwrap()));

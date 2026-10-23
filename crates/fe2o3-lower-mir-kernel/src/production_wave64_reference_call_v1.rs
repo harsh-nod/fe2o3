@@ -323,16 +323,24 @@ impl<'a> Resolver<'a> {
         for (bi, block) in declaration.blocks().iter().enumerate() {
             for (si, statement) in block.statements().iter().enumerate() {
                 budget.charge_work(1)?;
-                let SemanticStatementKindV1::Assign(assignment) = statement.kind() else { continue };
+                let SemanticStatementKindV1::Assign(assignment) = statement.kind() else {
+                    continue;
+                };
                 if matches!(assignment.value().kind(), SemanticRvalueKindV1::Borrow {
                     kind: SemanticBorrowKindV1::Shared, place
-                } if place.local() == local && place.projections().is_empty()) {
-                    if !assignment.destination().projections().is_empty() || holder_count == holders.len() {
+                } if place.local() == local && place.projections().is_empty())
+                {
+                    if !assignment.destination().projections().is_empty()
+                        || holder_count == holders.len()
+                    {
                         return refuse("retained lifetime shared-holder census");
                     }
                     holders[holder_count] = assignment.destination().local().index();
-                    closure[holder_count] = Some((function, assignment.destination().local().index(),
-                        Some((SemanticBlockIdV1::from_index(bi as u32), si as u32))));
+                    closure[holder_count] = Some((
+                        function,
+                        assignment.destination().local().index(),
+                        Some((SemanticBlockIdV1::from_index(bi as u32), si as u32)),
+                    ));
                     holder_count += 1;
                 }
             }
@@ -344,17 +352,33 @@ impl<'a> Resolver<'a> {
         let mut next = 0;
         while next < closure_len {
             budget.charge_work(4)?;
-            let (holder_function, holder, borrow) = closure[next]
-                .ok_or(ReferenceErrorV1::Unavailable("retained lifetime holder task"))?;
+            let (holder_function, holder, borrow) = closure[next].ok_or(
+                ReferenceErrorV1::Unavailable("retained lifetime holder task"),
+            )?;
             next += 1;
-            match super::require_unwritten_wave64_local_v1(self.owner, holder_function, holder, borrow, budget) {
+            match super::require_unwritten_wave64_local_v1(
+                self.owner,
+                holder_function,
+                holder,
+                borrow,
+                budget,
+            ) {
                 Ok(()) => {}
-                Err(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(error)) => return Err(error.into()),
+                Err(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(error)) => {
+                    return Err(error.into());
+                }
                 Err(error) => {
                     let kind = if let ProductionSemanticKirErrorV1::Unsupported {
-                        function, block: Some(block), statement: Some(statement), ..
-                    } = &error {
-                        self.owner.source_semantic().functions().get(*function as usize)
+                        function,
+                        block: Some(block),
+                        statement: Some(statement),
+                        ..
+                    } = &error
+                    {
+                        self.owner
+                            .source_semantic()
+                            .functions()
+                            .get(*function as usize)
                             .and_then(|f| f.blocks().get(*block as usize))
                             .and_then(|b| b.statements().get(*statement as usize))
                             .map(|s| match s.kind() {
@@ -362,22 +386,39 @@ impl<'a> Resolver<'a> {
                                 SemanticStatementKindV1::StorageDead(_) => "StorageDead",
                                 SemanticStatementKindV1::Assign(_) => "Assign",
                                 _ => "other",
-                            }).unwrap_or("absent")
-                    } else { "no statement coordinate" };
-                    eprintln!("Wave64 snapshot holder {} in function {}: {:?}; source kind {}",
-                        holder, holder_function.index(), error, kind);
-                    return refuse("retained snapshot holder lifetime or source write around storage end");
+                            })
+                            .unwrap_or("absent")
+                    } else {
+                        "no statement coordinate"
+                    };
+                    eprintln!(
+                        "Wave64 snapshot holder {} in function {}: {:?}; source kind {}",
+                        holder,
+                        holder_function.index(),
+                        error,
+                        kind
+                    );
+                    return refuse(
+                        "retained snapshot holder lifetime or source write around storage end",
+                    );
                 }
             }
             let body = &self.owner.source_semantic().functions()[holder_function.index() as usize];
-            let reference_type = body.locals().get(holder as usize)
-                .ok_or(ReferenceErrorV1::Unavailable("retained lifetime holder local"))?.ty();
-            let SemanticTypeShapeV1::Pointer(reference) = self.declaration(reference_type)?.shape() else {
+            let reference_type = body
+                .locals()
+                .get(holder as usize)
+                .ok_or(ReferenceErrorV1::Unavailable(
+                    "retained lifetime holder local",
+                ))?
+                .ty();
+            let SemanticTypeShapeV1::Pointer(reference) = self.declaration(reference_type)?.shape()
+            else {
                 return refuse("retained lifetime holder is not a source reference");
             };
             if reference.kind() != SemanticPointerKindV1::Reference
                 || reference.mutability() != SemanticMutabilityV1::Immutable
-                || reference.address_space() != 0 || reference.pointer_width_bits() != 64
+                || reference.address_space() != 0
+                || reference.pointer_width_bits() != 64
                 || reference.metadata() != SemanticPointerMetadataV1::None
                 || reference.pointee() != declaration.locals()[local.index() as usize].ty()
             {
@@ -385,44 +426,74 @@ impl<'a> Resolver<'a> {
             }
             for event in rows(self.owner, holder_function)?.events() {
                 budget.charge_work(1)?;
-                if !matches!(event.event(), fe2o3_mir_model::SsaEventV1::Use(variable) if variable.get() == holder) {
+                if !matches!(event.event(), fe2o3_mir_model::SsaEventV1::Use(variable) if variable.get() == holder)
+                {
                     continue;
                 }
                 let allowed = match (event.site(), event.operand()) {
                     (Site::Terminator { block }, OperandRole::CallArgument(0)) => {
                         if borrow.is_none() {
-                            return refuse("retained snapshot formal whole-reference forwarding unavailable");
+                            return refuse(
+                                "retained snapshot formal whole-reference forwarding unavailable",
+                            );
                         }
-                        let call = call_at(self.owner, holder_function, SemanticBlockIdV1::from_index(block.get()))
-                            .ok_or(ReferenceErrorV1::Unavailable("retained lifetime holder source call"))?;
-                        let Some(SemanticCallableDeclV1::Defined { function: callee }) = self.owner.source_semantic()
-                            .callables().get(call.callee().index() as usize) else {
-                            return refuse("retained snapshot holder foreign call escape around storage end");
+                        let call = call_at(
+                            self.owner,
+                            holder_function,
+                            SemanticBlockIdV1::from_index(block.get()),
+                        )
+                        .ok_or(ReferenceErrorV1::Unavailable(
+                            "retained lifetime holder source call",
+                        ))?;
+                        let Some(SemanticCallableDeclV1::Defined { function: callee }) = self
+                            .owner
+                            .source_semantic()
+                            .callables()
+                            .get(call.callee().index() as usize)
+                        else {
+                            return refuse(
+                                "retained snapshot holder foreign call escape around storage end",
+                            );
                         };
-                        let callee_body = &self.owner.source_semantic().functions()[callee.index() as usize];
+                        let callee_body =
+                            &self.owner.source_semantic().functions()[callee.index() as usize];
                         let abi = callee_body.abi();
                         if callee_body.role() != SemanticFunctionRoleV1::InternalHelper
-                            || callee_body.export().is_some() || abi.source_input_types().len() != 3
+                            || callee_body.export().is_some()
+                            || abi.source_input_types().len() != 3
                             || abi.source_input_types()[0] != reference_type
-                            || abi.source_argument_ownership()[0] != SemanticSourceArgumentOwnershipV1::SharedBorrow
+                            || abi.source_argument_ownership()[0]
+                                != SemanticSourceArgumentOwnershipV1::SharedBorrow
                             || !self.is_f32(abi.source_output_type())
                             || !matches!(call.arguments().first(), Some(SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place))
                                 if place.local().index() == holder && place.projections().is_empty() && place.ty() == reference_type)
                         {
-                            return refuse("retained snapshot holder is not an exact shared source formal");
+                            return refuse(
+                                "retained snapshot holder is not an exact shared source formal",
+                            );
                         }
                         let mut formal = None;
                         for (index, row) in callee_body.locals().iter().enumerate() {
                             budget.charge_work(1)?;
                             if row.role() == SemanticLocalRoleV1::Argument(0) {
-                                if row.ty() != reference_type { return refuse("retained lifetime formal type changed"); }
+                                if row.ty() != reference_type {
+                                    return refuse("retained lifetime formal type changed");
+                                }
                                 unique(&mut formal, index as u32)?;
                             }
                         }
-                        let formal = formal.ok_or(ReferenceErrorV1::Unavailable("retained lifetime formal absent"))?;
+                        let formal = formal.ok_or(ReferenceErrorV1::Unavailable(
+                            "retained lifetime formal absent",
+                        ))?;
                         budget.charge_work(closure_len)?;
-                        if !closure[..closure_len].iter().flatten().any(|(function, local, _)| function == callee && *local == formal) {
-                            if closure_len == closure.len() { return refuse("retained lifetime formal census"); }
+                        if !closure[..closure_len]
+                            .iter()
+                            .flatten()
+                            .any(|(function, local, _)| function == callee && *local == formal)
+                        {
+                            if closure_len == closure.len() {
+                                return refuse("retained lifetime formal census");
+                            }
                             closure[closure_len] = Some((*callee, formal, None));
                             closure_len += 1;
                         }
@@ -430,16 +501,24 @@ impl<'a> Resolver<'a> {
                     }
                     (Site::Statement { block, statement }, OperandRole::RvalueOperand(ordinal)) => {
                         let mut allowed = false;
-                        let original = body.blocks().get(block.get() as usize)
+                        let original = body
+                            .blocks()
+                            .get(block.get() as usize)
                             .and_then(|block| block.statements().get(statement as usize));
-                        if let Some(SemanticStatementKindV1::Assign(assignment)) = original.map(SemanticStatementV1::kind) {
+                        if let Some(SemanticStatementKindV1::Assign(assignment)) =
+                            original.map(SemanticStatementV1::kind)
+                        {
                             let mut index = 0u32;
                             assignment.value().kind().try_visit_operands(|operand| {
                                 budget.charge_work(1)?;
                                 if index == ordinal {
-                                    if let SemanticOperandV1::Copy(place) | SemanticOperandV1::Move(place) = operand {
+                                    if let SemanticOperandV1::Copy(place)
+                                    | SemanticOperandV1::Move(place) = operand
+                                    {
                                         allowed = place.local().index() == holder
-                                            && super::closed_wave64_scalar_projection_v1(self.owner, place);
+                                            && super::closed_wave64_scalar_projection_v1(
+                                                self.owner, place,
+                                            );
                                     }
                                 }
                                 index += 1;
@@ -466,7 +545,9 @@ impl<'a> Resolver<'a> {
             if from >= declaration.blocks().len() || to >= declaration.blocks().len() {
                 return refuse("retained lifetime source edge coordinate");
             }
-            if from == dead_block { reachable[to] = true; }
+            if from == dead_block {
+                reachable[to] = true;
+            }
         }
         for _ in 0..128 {
             let mut changed = false;
@@ -479,19 +560,24 @@ impl<'a> Resolver<'a> {
                     changed = true;
                 }
             }
-            if !changed { break; }
+            if !changed {
+                break;
+            }
         }
         for event in occurrences.events() {
             budget.charge_work(1)?;
-            let fe2o3_mir_model::SsaEventV1::Use(variable) = event.event() else { continue };
+            let fe2o3_mir_model::SsaEventV1::Use(variable) = event.event() else {
+                continue;
+            };
             budget.charge_work(holder_count)?;
             let holder = holders[..holder_count].contains(&variable.get());
             if variable.get() != local.index() && !holder {
                 continue;
             }
             let (block, after_in_same_block) = match event.site() {
-                Site::Statement { block, statement } =>
-                    (block.get() as usize, statement as usize > dead_statement),
+                Site::Statement { block, statement } => {
+                    (block.get() as usize, statement as usize > dead_statement)
+                }
                 Site::Terminator { block } => (block.get() as usize, true),
             };
             if block >= declaration.blocks().len() {
@@ -2131,8 +2217,27 @@ mod tests {
 
     fn fixture(mutation: Mutation) -> Result<ProductionSemanticSsaOwnerV1, String> {
         let source = SemanticSourceProvenanceV1::unavailable();
-        let shift_counter = matches!(mutation, Mutation::ShiftCounter | Mutation::ShiftCounterZero | Mutation::ShiftCounterOverwide | Mutation::ShiftCounterZeroShift | Mutation::ShiftCounterWideShift | Mutation::ShiftCounterDynamicShift | Mutation::ShiftCounterReassign | Mutation::ShiftCounterInitReentry | Mutation::ShiftCounterBorrow | Mutation::ShiftCounterRawAddress | Mutation::ShiftCounterSigned);
-        let raw = shift_counter || matches!(mutation, Mutation::RawShuffle | Mutation::RawShuffleTerminalDeadSnapshot | Mutation::RawShuffleHolderOrderedStorage);
+        let shift_counter = matches!(
+            mutation,
+            Mutation::ShiftCounter
+                | Mutation::ShiftCounterZero
+                | Mutation::ShiftCounterOverwide
+                | Mutation::ShiftCounterZeroShift
+                | Mutation::ShiftCounterWideShift
+                | Mutation::ShiftCounterDynamicShift
+                | Mutation::ShiftCounterReassign
+                | Mutation::ShiftCounterInitReentry
+                | Mutation::ShiftCounterBorrow
+                | Mutation::ShiftCounterRawAddress
+                | Mutation::ShiftCounterSigned
+        );
+        let raw = shift_counter
+            || matches!(
+                mutation,
+                Mutation::RawShuffle
+                    | Mutation::RawShuffleTerminalDeadSnapshot
+                    | Mutation::RawShuffleHolderOrderedStorage
+            );
         let id = SemanticTypeIdV1::from_index;
         let unit = id(0);
         let word = id(1);
@@ -2318,12 +2423,23 @@ mod tests {
         let raw_word_pointer = id(13);
         if shift_counter {
             types.push(SemanticTypeDeclV1::new(
-                SemanticTypeIdentityV1::from_sha256([14; 32]), SemanticLayoutIdentityV1::from_sha256([14; 32]),
-                SemanticTypeLayoutV1::new_with_backend_repr(Some(4), 4,
+                SemanticTypeIdentityV1::from_sha256([14; 32]),
+                SemanticLayoutIdentityV1::from_sha256([14; 32]),
+                SemanticTypeLayoutV1::new_with_backend_repr(
+                    Some(4),
+                    4,
                     SemanticBackendReprV1::scalar(SemanticBackendScalarV1::initialized(
                         SemanticBackendPrimitiveV1::integer(true, 32, 4),
-                        SemanticScalarValidityRangeV1::new(0, u32::MAX.into()))), false).unwrap(),
-                SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer { signed: true, bits: 32 })));
+                        SemanticScalarValidityRangeV1::new(0, u32::MAX.into()),
+                    )),
+                    false,
+                )
+                .unwrap(),
+                SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
+                    signed: true,
+                    bits: 32,
+                }),
+            ));
             types.push(raw_pointer(15, word));
         }
         let direct = |ty| {
@@ -2419,20 +2535,29 @@ mod tests {
             // argument/return contract, not a factory activation predicate.
             callables.push(SemanticCallableDeclV1::CompilerIntrinsic {
                 binding: SemanticNonBodyCallableBindingV1::new(
-                    SemanticFunctionIdentityV1::from_sha256([22;32]),
-                    SemanticItemDefinitionIdentityV1::from_sha256([22;32]),
-                    SemanticMonomorphizationIdentityV1::from_sha256([22;32]),
-                    SemanticGenericTypeArgumentsIdentityV1::from_sha256([22;32]),
-                    SemanticConstGenericArgumentsIdentityV1::from_sha256([22;32]),
+                    SemanticFunctionIdentityV1::from_sha256([22; 32]),
+                    SemanticItemDefinitionIdentityV1::from_sha256([22; 32]),
+                    SemanticMonomorphizationIdentityV1::from_sha256([22; 32]),
+                    SemanticGenericTypeArgumentsIdentityV1::from_sha256([22; 32]),
+                    SemanticConstGenericArgumentsIdentityV1::from_sha256([22; 32]),
                     source,
-                    abi(22,vec![context_ref,float,word],float,vec![
-                        SemanticSourceArgumentOwnershipV1::SharedBorrow,
-                        SemanticSourceArgumentOwnershipV1::ByValue,
-                        SemanticSourceArgumentOwnershipV1::ByValue,
-                    ],false),
+                    abi(
+                        22,
+                        vec![context_ref, float, word],
+                        float,
+                        vec![
+                            SemanticSourceArgumentOwnershipV1::SharedBorrow,
+                            SemanticSourceArgumentOwnershipV1::ByValue,
+                            SemanticSourceArgumentOwnershipV1::ByValue,
+                        ],
+                        false,
+                    ),
                 ),
-                operation: SemanticCompilerIntrinsicOperationV1::Gfx942Wave64ShuffleIndex {context,element:float},
-                operation_identity: SemanticCompilerIntrinsicIdentityV1::from_sha256([22;32]),
+                operation: SemanticCompilerIntrinsicOperationV1::Gfx942Wave64ShuffleIndex {
+                    context,
+                    element: float,
+                },
+                operation_identity: SemanticCompilerIntrinsicIdentityV1::from_sha256([22; 32]),
             });
         }
         let place = |local, ty| {
@@ -2543,14 +2668,16 @@ mod tests {
                 context_ref,
                 SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(place(5, context_ref))),
             )),
-            Mutation::RawSnapshotReference | Mutation::HolderAliasInitialLive => statements.push(assignment(
-                14,
-                raw_snapshot_ptr,
-                SemanticRvalueKindV1::Cast {
-                    kind: SemanticCastKindV1::Pointer,
-                    operand: SemanticOperandV1::Copy(place(4, snapshot_ref)),
-                },
-            )),
+            Mutation::RawSnapshotReference | Mutation::HolderAliasInitialLive => {
+                statements.push(assignment(
+                    14,
+                    raw_snapshot_ptr,
+                    SemanticRvalueKindV1::Cast {
+                        kind: SemanticCastKindV1::Pointer,
+                        operand: SemanticOperandV1::Copy(place(4, snapshot_ref)),
+                    },
+                ))
+            }
             Mutation::RawContextReference => statements.push(assignment(
                 15,
                 raw_context_ptr,
@@ -2564,11 +2691,27 @@ mod tests {
         if raw {
             // The real defined-call input is an original SSA use, with distinct
             // real source values available for coherent typed graph mutations.
-            statements.push(assignment(6,float,SemanticRvalueKindV1::Use(constant(float,
-                SemanticConstantValueV1::Scalar(SemanticScalarValueV1::new(0x3f800000,4).unwrap())))));
-            statements.push(assignment(16,word,SemanticRvalueKindV1::Use(number(7))));
-            statements.push(assignment(17,float,SemanticRvalueKindV1::Use(constant(float,
-                SemanticConstantValueV1::Scalar(SemanticScalarValueV1::new(0x40000000,4).unwrap())))));
+            statements.push(assignment(
+                6,
+                float,
+                SemanticRvalueKindV1::Use(constant(
+                    float,
+                    SemanticConstantValueV1::Scalar(
+                        SemanticScalarValueV1::new(0x3f800000, 4).unwrap(),
+                    ),
+                )),
+            ));
+            statements.push(assignment(16, word, SemanticRvalueKindV1::Use(number(7))));
+            statements.push(assignment(
+                17,
+                float,
+                SemanticRvalueKindV1::Use(constant(
+                    float,
+                    SemanticConstantValueV1::Scalar(
+                        SemanticScalarValueV1::new(0x40000000, 4).unwrap(),
+                    ),
+                )),
+            ));
         }
         if matches!(mutation, Mutation::UnissuedLane) {
             statements.insert(
@@ -2667,25 +2810,43 @@ mod tests {
             statements.push(assignment(3, snapshot, snapshot_value(number(9))));
         }
         if matches!(mutation, Mutation::TerminalDeadSnapshotAliasCopy) {
-            statements.push(assignment(11, snapshot_ref,
-                SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(place(4, snapshot_ref)))));
+            statements.push(assignment(
+                11,
+                snapshot_ref,
+                SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(place(4, snapshot_ref))),
+            ));
         }
         if matches!(mutation, Mutation::TerminalDeadSnapshotRawAlias) {
-            statements.push(assignment(14, raw_snapshot_ptr, SemanticRvalueKindV1::Cast {
-                kind: SemanticCastKindV1::Pointer, operand: SemanticOperandV1::Copy(place(4, snapshot_ref)),
-            }));
+            statements.push(assignment(
+                14,
+                raw_snapshot_ptr,
+                SemanticRvalueKindV1::Cast {
+                    kind: SemanticCastKindV1::Pointer,
+                    operand: SemanticOperandV1::Copy(place(4, snapshot_ref)),
+                },
+            ));
         }
         if matches!(mutation, Mutation::HolderDeadBeforeCall) {
             // The original reference holder dies after its real Borrow but
             // before the original helper's CallArgument(0) reads it.
-            statements.push(SemanticStatementV1::new(source,
-                SemanticStatementKindV1::StorageDead(SemanticLocalIdV1::from_index(4))));
+            statements.push(SemanticStatementV1::new(
+                source,
+                SemanticStatementKindV1::StorageDead(SemanticLocalIdV1::from_index(4)),
+            ));
         }
-        if matches!(mutation, Mutation::HolderLocalLive | Mutation::HolderLiveBackedge) {
+        if matches!(
+            mutation,
+            Mutation::HolderLocalLive | Mutation::HolderLiveBackedge
+        ) {
             let index = statements.iter().position(|statement| matches!(statement.kind(),
                 SemanticStatementKindV1::Assign(assignment) if assignment.destination().local().index() == 4)).unwrap();
-            statements.insert(index, SemanticStatementV1::new(source,
-                SemanticStatementKindV1::StorageLive(SemanticLocalIdV1::from_index(4))));
+            statements.insert(
+                index,
+                SemanticStatementV1::new(
+                    source,
+                    SemanticStatementKindV1::StorageLive(SemanticLocalIdV1::from_index(4)),
+                ),
+            );
         }
         let mut root_blocks = vec![
             // Keep both genuine compiler declarations in the root closure even
@@ -2723,10 +2884,14 @@ mod tests {
                         },
                         SemanticOperandV1::Copy(place(5, context_ref)),
                         if raw {
-                            SemanticOperandV1::Copy(place(6,float))
+                            SemanticOperandV1::Copy(place(6, float))
                         } else {
-                            constant(float,SemanticConstantValueV1::Scalar(
-                                SemanticScalarValueV1::new(0,4).unwrap()))
+                            constant(
+                                float,
+                                SemanticConstantValueV1::Scalar(
+                                    SemanticScalarValueV1::new(0, 4).unwrap(),
+                                ),
+                            )
                         },
                     ],
                     6,
@@ -2737,78 +2902,213 @@ mod tests {
             block(33, vec![], SemanticTerminatorKindV1::Return),
         ];
         if raw {
-            root_blocks[3]=block(33,vec![],SemanticTerminatorKindV1::Goto(
-                SemanticControlFlowEdgeV1::new(SemanticEdgeRoleV1::Goto,SemanticBlockIdV1::from_index(4))));
-            root_blocks.push(block(34,vec![],SemanticTerminatorKindV1::Return));
+            root_blocks[3] = block(
+                33,
+                vec![],
+                SemanticTerminatorKindV1::Goto(SemanticControlFlowEdgeV1::new(
+                    SemanticEdgeRoleV1::Goto,
+                    SemanticBlockIdV1::from_index(4),
+                )),
+            );
+            root_blocks.push(block(34, vec![], SemanticTerminatorKindV1::Return));
         }
-        if matches!(mutation, Mutation::TerminalDeadSnapshot | Mutation::TerminalDeadSnapshotAliasCopy
-            | Mutation::TerminalDeadSnapshotRawAlias | Mutation::TerminalDeadSnapshotFormalRawAlias
-            | Mutation::DeadSnapshotFutureRead
-            | Mutation::DeadSnapshotBackedge | Mutation::DeadSnapshotUnreachableIncoming
-            | Mutation::RawShuffleTerminalDeadSnapshot) {
-            let dead = SemanticStatementV1::new(source,
-                SemanticStatementKindV1::StorageDead(SemanticLocalIdV1::from_index(3)));
-            let terminal = if matches!(mutation, Mutation::RawShuffleTerminalDeadSnapshot) { 4 } else { 3 };
+        if matches!(
+            mutation,
+            Mutation::TerminalDeadSnapshot
+                | Mutation::TerminalDeadSnapshotAliasCopy
+                | Mutation::TerminalDeadSnapshotRawAlias
+                | Mutation::TerminalDeadSnapshotFormalRawAlias
+                | Mutation::DeadSnapshotFutureRead
+                | Mutation::DeadSnapshotBackedge
+                | Mutation::DeadSnapshotUnreachableIncoming
+                | Mutation::RawShuffleTerminalDeadSnapshot
+        ) {
+            let dead = SemanticStatementV1::new(
+                source,
+                SemanticStatementKindV1::StorageDead(SemanticLocalIdV1::from_index(3)),
+            );
+            let terminal = if matches!(mutation, Mutation::RawShuffleTerminalDeadSnapshot) {
+                4
+            } else {
+                3
+            };
             let mut suffix = vec![dead];
-            if matches!(mutation, Mutation::DeadSnapshotFutureRead | Mutation::TerminalDeadSnapshotAliasCopy) {
-                let read_holder = if matches!(mutation, Mutation::TerminalDeadSnapshotAliasCopy) { 11 } else { 4 };
-                suffix.push(assignment(16, word, SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(
-                    SemanticPlaceV1::new(SemanticLocalIdV1::from_index(read_holder), vec![
-                        SemanticProjectionV1::new(SemanticProjectionKindV1::Dereference, snapshot).unwrap(),
-                        SemanticProjectionV1::new(SemanticProjectionKindV1::Field(0), word).unwrap(),
-                    ], word).unwrap()))));
+            if matches!(
+                mutation,
+                Mutation::DeadSnapshotFutureRead | Mutation::TerminalDeadSnapshotAliasCopy
+            ) {
+                let read_holder = if matches!(mutation, Mutation::TerminalDeadSnapshotAliasCopy) {
+                    11
+                } else {
+                    4
+                };
+                suffix.push(assignment(
+                    16,
+                    word,
+                    SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(
+                        SemanticPlaceV1::new(
+                            SemanticLocalIdV1::from_index(read_holder),
+                            vec![
+                                SemanticProjectionV1::new(
+                                    SemanticProjectionKindV1::Dereference,
+                                    snapshot,
+                                )
+                                .unwrap(),
+                                SemanticProjectionV1::new(SemanticProjectionKindV1::Field(0), word)
+                                    .unwrap(),
+                            ],
+                            word,
+                        )
+                        .unwrap(),
+                    )),
+                ));
             }
             let tail = if matches!(mutation, Mutation::DeadSnapshotBackedge) {
                 SemanticTerminatorKindV1::Goto(SemanticControlFlowEdgeV1::new(
-                    SemanticEdgeRoleV1::Goto, SemanticBlockIdV1::from_index(2)))
-            } else { SemanticTerminatorKindV1::Return };
+                    SemanticEdgeRoleV1::Goto,
+                    SemanticBlockIdV1::from_index(2),
+                ))
+            } else {
+                SemanticTerminatorKindV1::Return
+            };
             root_blocks[terminal] = block(33 + terminal as u8, suffix, tail);
             if matches!(mutation, Mutation::TerminalDeadSnapshotAliasCopy) {
-                root_blocks[terminal] = block(36, vec![SemanticStatementV1::new(source,
-                    SemanticStatementKindV1::StorageDead(SemanticLocalIdV1::from_index(3)))],
-                    call(1, vec![SemanticOperandV1::Copy(place(11, snapshot_ref)),
-                        SemanticOperandV1::Copy(place(5, context_ref)),
-                        constant(float, SemanticConstantValueV1::Scalar(SemanticScalarValueV1::new(0,4).unwrap()))],
-                        6, float, 4));
+                root_blocks[terminal] = block(
+                    36,
+                    vec![SemanticStatementV1::new(
+                        source,
+                        SemanticStatementKindV1::StorageDead(SemanticLocalIdV1::from_index(3)),
+                    )],
+                    call(
+                        1,
+                        vec![
+                            SemanticOperandV1::Copy(place(11, snapshot_ref)),
+                            SemanticOperandV1::Copy(place(5, context_ref)),
+                            constant(
+                                float,
+                                SemanticConstantValueV1::Scalar(
+                                    SemanticScalarValueV1::new(0, 4).unwrap(),
+                                ),
+                            ),
+                        ],
+                        6,
+                        float,
+                        4,
+                    ),
+                );
                 root_blocks.push(block(39, vec![], SemanticTerminatorKindV1::Return));
             }
             if matches!(mutation, Mutation::DeadSnapshotUnreachableIncoming) {
-                root_blocks.push(block(37, vec![], call(1, vec![
-                    SemanticOperandV1::Copy(place(4, snapshot_ref)),
-                    SemanticOperandV1::Copy(place(5, context_ref)),
-                    constant(float, SemanticConstantValueV1::Scalar(SemanticScalarValueV1::new(0, 4).unwrap())),
-                ], 6, float, 5)));
+                root_blocks.push(block(
+                    37,
+                    vec![],
+                    call(
+                        1,
+                        vec![
+                            SemanticOperandV1::Copy(place(4, snapshot_ref)),
+                            SemanticOperandV1::Copy(place(5, context_ref)),
+                            constant(
+                                float,
+                                SemanticConstantValueV1::Scalar(
+                                    SemanticScalarValueV1::new(0, 4).unwrap(),
+                                ),
+                            ),
+                        ],
+                        6,
+                        float,
+                        5,
+                    ),
+                ));
                 root_blocks.push(block(38, vec![], SemanticTerminatorKindV1::Return));
             }
         }
-        if matches!(mutation, Mutation::HolderEntryLive | Mutation::HolderOrderedStorage
-            | Mutation::RawShuffleHolderOrderedStorage | Mutation::HolderRestart | Mutation::HolderAliasInitialLive) {
-            root_blocks[0] = block(30, vec![
-                SemanticStatementV1::new(source, SemanticStatementKindV1::StorageLive(SemanticLocalIdV1::from_index(4))),
-                SemanticStatementV1::new(source, SemanticStatementKindV1::StorageLive(SemanticLocalIdV1::from_index(5))),
-            ], call(2, vec![], 1, lane, 1));
+        if matches!(
+            mutation,
+            Mutation::HolderEntryLive
+                | Mutation::HolderOrderedStorage
+                | Mutation::RawShuffleHolderOrderedStorage
+                | Mutation::HolderRestart
+                | Mutation::HolderAliasInitialLive
+        ) {
+            root_blocks[0] = block(
+                30,
+                vec![
+                    SemanticStatementV1::new(
+                        source,
+                        SemanticStatementKindV1::StorageLive(SemanticLocalIdV1::from_index(4)),
+                    ),
+                    SemanticStatementV1::new(
+                        source,
+                        SemanticStatementKindV1::StorageLive(SemanticLocalIdV1::from_index(5)),
+                    ),
+                ],
+                call(2, vec![], 1, lane, 1),
+            );
         }
-        if matches!(mutation, Mutation::HolderOrderedStorage | Mutation::RawShuffleHolderOrderedStorage) {
-            let terminal = if matches!(mutation, Mutation::RawShuffleHolderOrderedStorage) { 4 } else { 3 };
-            root_blocks[terminal] = block(81, vec![
-                SemanticStatementV1::new(source, SemanticStatementKindV1::StorageDead(SemanticLocalIdV1::from_index(4))),
-                SemanticStatementV1::new(source, SemanticStatementKindV1::StorageDead(SemanticLocalIdV1::from_index(5))),
-            ], SemanticTerminatorKindV1::Return);
+        if matches!(
+            mutation,
+            Mutation::HolderOrderedStorage | Mutation::RawShuffleHolderOrderedStorage
+        ) {
+            let terminal = if matches!(mutation, Mutation::RawShuffleHolderOrderedStorage) {
+                4
+            } else {
+                3
+            };
+            root_blocks[terminal] = block(
+                81,
+                vec![
+                    SemanticStatementV1::new(
+                        source,
+                        SemanticStatementKindV1::StorageDead(SemanticLocalIdV1::from_index(4)),
+                    ),
+                    SemanticStatementV1::new(
+                        source,
+                        SemanticStatementKindV1::StorageDead(SemanticLocalIdV1::from_index(5)),
+                    ),
+                ],
+                SemanticTerminatorKindV1::Return,
+            );
         }
         if matches!(mutation, Mutation::HolderLateLive | Mutation::HolderRestart) {
-            root_blocks[3] = block(81, vec![SemanticStatementV1::new(source,
-                SemanticStatementKindV1::StorageLive(SemanticLocalIdV1::from_index(4)))], SemanticTerminatorKindV1::Return);
+            root_blocks[3] = block(
+                81,
+                vec![SemanticStatementV1::new(
+                    source,
+                    SemanticStatementKindV1::StorageLive(SemanticLocalIdV1::from_index(4)),
+                )],
+                SemanticTerminatorKindV1::Return,
+            );
         }
         if matches!(mutation, Mutation::HolderUnreachableLive) {
-            root_blocks.push(block(82, vec![SemanticStatementV1::new(source,
-                SemanticStatementKindV1::StorageLive(SemanticLocalIdV1::from_index(4)))], SemanticTerminatorKindV1::Return));
+            root_blocks.push(block(
+                82,
+                vec![SemanticStatementV1::new(
+                    source,
+                    SemanticStatementKindV1::StorageLive(SemanticLocalIdV1::from_index(4)),
+                )],
+                SemanticTerminatorKindV1::Return,
+            ));
         }
-        if matches!(mutation, Mutation::HolderLiveBackedge | Mutation::HolderDeadBackedge) {
+        if matches!(
+            mutation,
+            Mutation::HolderLiveBackedge | Mutation::HolderDeadBackedge
+        ) {
             let statements = if matches!(mutation, Mutation::HolderDeadBackedge) {
-                vec![SemanticStatementV1::new(source, SemanticStatementKindV1::StorageDead(SemanticLocalIdV1::from_index(4)))]
-            } else { vec![] };
-            root_blocks[3] = block(81, statements, SemanticTerminatorKindV1::Goto(
-                SemanticControlFlowEdgeV1::new(SemanticEdgeRoleV1::Goto, SemanticBlockIdV1::from_index(2))));
+                vec![SemanticStatementV1::new(
+                    source,
+                    SemanticStatementKindV1::StorageDead(SemanticLocalIdV1::from_index(4)),
+                )]
+            } else {
+                vec![]
+            };
+            root_blocks[3] = block(
+                81,
+                statements,
+                SemanticTerminatorKindV1::Goto(SemanticControlFlowEdgeV1::new(
+                    SemanticEdgeRoleV1::Goto,
+                    SemanticBlockIdV1::from_index(2),
+                )),
+            );
         }
         if matches!(mutation, Mutation::InitialStorageLive) {
             root_blocks[0] = block(
@@ -3060,17 +3360,19 @@ mod tests {
                     SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(place(2, context_ref))),
                 ),
             ),
-            Mutation::RawSnapshotFormal | Mutation::TerminalDeadSnapshotFormalRawAlias => helper_statements.insert(
-                0,
-                assignment(
-                    4,
-                    raw_snapshot_ptr,
-                    SemanticRvalueKindV1::Cast {
-                        kind: SemanticCastKindV1::Pointer,
-                        operand: SemanticOperandV1::Copy(place(1, snapshot_ref)),
-                    },
-                ),
-            ),
+            Mutation::RawSnapshotFormal | Mutation::TerminalDeadSnapshotFormalRawAlias => {
+                helper_statements.insert(
+                    0,
+                    assignment(
+                        4,
+                        raw_snapshot_ptr,
+                        SemanticRvalueKindV1::Cast {
+                            kind: SemanticCastKindV1::Pointer,
+                            operand: SemanticOperandV1::Copy(place(1, snapshot_ref)),
+                        },
+                    ),
+                )
+            }
             Mutation::RawContextFormal => helper_statements.insert(
                 0,
                 assignment(
@@ -3084,116 +3386,298 @@ mod tests {
             ),
             _ => {}
         }
-        if matches!(mutation, Mutation::HolderFormalLive | Mutation::HolderFormalDead) {
+        if matches!(
+            mutation,
+            Mutation::HolderFormalLive | Mutation::HolderFormalDead
+        ) {
             let kind = if matches!(mutation, Mutation::HolderFormalLive) {
                 SemanticStatementKindV1::StorageLive(SemanticLocalIdV1::from_index(1))
-            } else { SemanticStatementKindV1::StorageDead(SemanticLocalIdV1::from_index(1)) };
+            } else {
+                SemanticStatementKindV1::StorageDead(SemanticLocalIdV1::from_index(1))
+            };
             helper_statements.insert(0, SemanticStatementV1::new(source, kind));
         }
-        let counter_ty = if matches!(mutation, Mutation::ShiftCounterSigned) { signed_word } else { word };
+        let counter_ty = if matches!(mutation, Mutation::ShiftCounterSigned) {
+            signed_word
+        } else {
+            word
+        };
         let mut helper_locals = vec![
-                (float, SemanticLocalRoleV1::Return),
-                (
-                    if matches!(mutation, Mutation::Rank) {
-                        word
-                    } else {
-                        snapshot_ref
-                    },
-                    SemanticLocalRoleV1::Argument(0),
-                ),
-                (context_ref, SemanticLocalRoleV1::Argument(1)),
-                (float, SemanticLocalRoleV1::Argument(2)),
-                (raw_snapshot_ptr, SemanticLocalRoleV1::Temporary),
-                (raw_context_ptr, SemanticLocalRoleV1::Temporary),
-                (word, SemanticLocalRoleV1::Temporary),
-            ];
+            (float, SemanticLocalRoleV1::Return),
+            (
+                if matches!(mutation, Mutation::Rank) {
+                    word
+                } else {
+                    snapshot_ref
+                },
+                SemanticLocalRoleV1::Argument(0),
+            ),
+            (context_ref, SemanticLocalRoleV1::Argument(1)),
+            (float, SemanticLocalRoleV1::Argument(2)),
+            (raw_snapshot_ptr, SemanticLocalRoleV1::Temporary),
+            (raw_context_ptr, SemanticLocalRoleV1::Temporary),
+            (word, SemanticLocalRoleV1::Temporary),
+        ];
         if shift_counter {
-            helper_locals.extend([(counter_ty, SemanticLocalRoleV1::Temporary),
-                (word, SemanticLocalRoleV1::Temporary), (word, SemanticLocalRoleV1::Temporary),
-                (word_ref, SemanticLocalRoleV1::Temporary), (raw_word_pointer, SemanticLocalRoleV1::Temporary)]);
+            helper_locals.extend([
+                (counter_ty, SemanticLocalRoleV1::Temporary),
+                (word, SemanticLocalRoleV1::Temporary),
+                (word, SemanticLocalRoleV1::Temporary),
+                (word_ref, SemanticLocalRoleV1::Temporary),
+                (raw_word_pointer, SemanticLocalRoleV1::Temporary),
+            ]);
             if matches!(mutation, Mutation::ShiftCounterDynamicShift) {
                 helper_locals.push((signed_word, SemanticLocalRoleV1::Temporary));
             }
         }
         let helper_blocks = if shift_counter {
-            let edge = |role, target| SemanticControlFlowEdgeV1::new(role, SemanticBlockIdV1::from_index(target));
-            let init = if matches!(mutation, Mutation::ShiftCounterZero) { 0 }
-                else if matches!(mutation, Mutation::ShiftCounterOverwide) { 64 } else { 32 };
-            let literal = |ty, value| constant(ty, SemanticConstantValueV1::Scalar(SemanticScalarValueV1::new(value, 4).unwrap()));
+            let edge = |role, target| {
+                SemanticControlFlowEdgeV1::new(role, SemanticBlockIdV1::from_index(target))
+            };
+            let init = if matches!(mutation, Mutation::ShiftCounterZero) {
+                0
+            } else if matches!(mutation, Mutation::ShiftCounterOverwide) {
+                64
+            } else {
+                32
+            };
+            let literal = |ty, value| {
+                constant(
+                    ty,
+                    SemanticConstantValueV1::Scalar(SemanticScalarValueV1::new(value, 4).unwrap()),
+                )
+            };
             let mut initialize = vec![
-                SemanticStatementV1::new(source, SemanticStatementKindV1::StorageLive(SemanticLocalIdV1::from_index(7))),
-                assignment(7, counter_ty, SemanticRvalueKindV1::Use(literal(counter_ty, init))),
+                SemanticStatementV1::new(
+                    source,
+                    SemanticStatementKindV1::StorageLive(SemanticLocalIdV1::from_index(7)),
+                ),
+                assignment(
+                    7,
+                    counter_ty,
+                    SemanticRvalueKindV1::Use(literal(counter_ty, init)),
+                ),
             ];
             if matches!(mutation, Mutation::ShiftCounterBorrow) {
-                initialize.push(assignment(10, word_ref, SemanticRvalueKindV1::Borrow {
-                    kind: SemanticBorrowKindV1::Shared, place: place(7, word) }));
+                initialize.push(assignment(
+                    10,
+                    word_ref,
+                    SemanticRvalueKindV1::Borrow {
+                        kind: SemanticBorrowKindV1::Shared,
+                        place: place(7, word),
+                    },
+                ));
             }
             if matches!(mutation, Mutation::ShiftCounterRawAddress) {
-                initialize.push(assignment(11, raw_word_pointer, SemanticRvalueKindV1::AddressOf {
-                    mutability: SemanticMutabilityV1::Mutable, place: place(7, word) }));
+                initialize.push(assignment(
+                    11,
+                    raw_word_pointer,
+                    SemanticRvalueKindV1::AddressOf {
+                        mutability: SemanticMutabilityV1::Mutable,
+                        place: place(7, word),
+                    },
+                ));
             }
-            let shift = if matches!(mutation, Mutation::ShiftCounterZeroShift) { 0 }
-                else if matches!(mutation, Mutation::ShiftCounterWideShift) { 32 } else { 1 };
+            let shift = if matches!(mutation, Mutation::ShiftCounterZeroShift) {
+                0
+            } else if matches!(mutation, Mutation::ShiftCounterWideShift) {
+                32
+            } else {
+                1
+            };
             let right = if matches!(mutation, Mutation::ShiftCounterDynamicShift) {
                 SemanticOperandV1::Copy(place(12, signed_word))
-            } else { literal(signed_word, shift) };
-            let mut step = vec![assignment(7, counter_ty, SemanticRvalueKindV1::Binary {
-                operation: SemanticBinaryOpV1::ShiftRight,
-                left: SemanticOperandV1::Copy(place(7, counter_ty)), right })];
+            } else {
+                literal(signed_word, shift)
+            };
+            let mut step = vec![assignment(
+                7,
+                counter_ty,
+                SemanticRvalueKindV1::Binary {
+                    operation: SemanticBinaryOpV1::ShiftRight,
+                    left: SemanticOperandV1::Copy(place(7, counter_ty)),
+                    right,
+                },
+            )];
             if matches!(mutation, Mutation::ShiftCounterDynamicShift) {
-                step.insert(0, assignment(12, signed_word, SemanticRvalueKindV1::Cast {
-                    kind: SemanticCastKindV1::Integer,
-                    operand: SemanticOperandV1::Copy(place(9, word)),
-                }));
+                step.insert(
+                    0,
+                    assignment(
+                        12,
+                        signed_word,
+                        SemanticRvalueKindV1::Cast {
+                            kind: SemanticCastKindV1::Integer,
+                            operand: SemanticOperandV1::Copy(place(9, word)),
+                        },
+                    ),
+                );
             }
             if matches!(mutation, Mutation::ShiftCounterReassign) {
-                step.push(assignment(7, counter_ty, SemanticRvalueKindV1::Use(literal(counter_ty, 64))));
+                step.push(assignment(
+                    7,
+                    counter_ty,
+                    SemanticRvalueKindV1::Use(literal(counter_ty, 64)),
+                ));
             }
             vec![
-                block(83, vec![assignment(0, float, SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(place(3, float))))],
-                    SemanticTerminatorKindV1::Goto(edge(SemanticEdgeRoleV1::Goto, 5))),
-                block(84, vec![], SemanticTerminatorKindV1::SwitchInt {
-                    discriminant: SemanticOperandV1::Copy(place(7, counter_ty)),
-                    targets: SemanticSwitchTargetsV1::new(vec![SemanticSwitchTargetV1::new(0,
-                        edge(SemanticEdgeRoleV1::SwitchValue, 4))], edge(SemanticEdgeRoleV1::SwitchOtherwise, 2)).unwrap(),
-                }),
-                block(85, vec![
-                    assignment(6, word, SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(SemanticPlaceV1::new(
-                        SemanticLocalIdV1::from_index(1), vec![
-                            SemanticProjectionV1::new(SemanticProjectionKindV1::Dereference, snapshot).unwrap(),
-                            SemanticProjectionV1::new(SemanticProjectionKindV1::Field(0), word).unwrap()], word).unwrap()))),
-                    assignment(9, word, if matches!(mutation, Mutation::ShiftCounterSigned) {
-                        SemanticRvalueKindV1::Cast { kind: SemanticCastKindV1::Integer,
-                            operand: SemanticOperandV1::Copy(place(7, signed_word)) }
-                    } else { SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(place(7, word))) }),
-                    assignment(8, word, SemanticRvalueKindV1::Binary { operation: SemanticBinaryOpV1::BitXor,
-                        left: SemanticOperandV1::Copy(place(6, word)), right: SemanticOperandV1::Copy(place(9, word)) }),
-                ], call(4, vec![SemanticOperandV1::Copy(place(2, context_ref)),
-                    SemanticOperandV1::Copy(place(0, float)), SemanticOperandV1::Copy(place(8, word))], 0, float, 3)),
-                block(86, step, SemanticTerminatorKindV1::Goto(edge(SemanticEdgeRoleV1::Goto,
-                    if matches!(mutation, Mutation::ShiftCounterInitReentry) { 5 } else { 1 }))),
-                block(87, vec![SemanticStatementV1::new(source,
-                    SemanticStatementKindV1::StorageDead(SemanticLocalIdV1::from_index(7)))], SemanticTerminatorKindV1::Return),
-                block(88, initialize, SemanticTerminatorKindV1::Goto(edge(SemanticEdgeRoleV1::Goto, 1))),
+                block(
+                    83,
+                    vec![assignment(
+                        0,
+                        float,
+                        SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(place(3, float))),
+                    )],
+                    SemanticTerminatorKindV1::Goto(edge(SemanticEdgeRoleV1::Goto, 5)),
+                ),
+                block(
+                    84,
+                    vec![],
+                    SemanticTerminatorKindV1::SwitchInt {
+                        discriminant: SemanticOperandV1::Copy(place(7, counter_ty)),
+                        targets: SemanticSwitchTargetsV1::new(
+                            vec![SemanticSwitchTargetV1::new(
+                                0,
+                                edge(SemanticEdgeRoleV1::SwitchValue, 4),
+                            )],
+                            edge(SemanticEdgeRoleV1::SwitchOtherwise, 2),
+                        )
+                        .unwrap(),
+                    },
+                ),
+                block(
+                    85,
+                    vec![
+                        assignment(
+                            6,
+                            word,
+                            SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(
+                                SemanticPlaceV1::new(
+                                    SemanticLocalIdV1::from_index(1),
+                                    vec![
+                                        SemanticProjectionV1::new(
+                                            SemanticProjectionKindV1::Dereference,
+                                            snapshot,
+                                        )
+                                        .unwrap(),
+                                        SemanticProjectionV1::new(
+                                            SemanticProjectionKindV1::Field(0),
+                                            word,
+                                        )
+                                        .unwrap(),
+                                    ],
+                                    word,
+                                )
+                                .unwrap(),
+                            )),
+                        ),
+                        assignment(
+                            9,
+                            word,
+                            if matches!(mutation, Mutation::ShiftCounterSigned) {
+                                SemanticRvalueKindV1::Cast {
+                                    kind: SemanticCastKindV1::Integer,
+                                    operand: SemanticOperandV1::Copy(place(7, signed_word)),
+                                }
+                            } else {
+                                SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(place(7, word)))
+                            },
+                        ),
+                        assignment(
+                            8,
+                            word,
+                            SemanticRvalueKindV1::Binary {
+                                operation: SemanticBinaryOpV1::BitXor,
+                                left: SemanticOperandV1::Copy(place(6, word)),
+                                right: SemanticOperandV1::Copy(place(9, word)),
+                            },
+                        ),
+                    ],
+                    call(
+                        4,
+                        vec![
+                            SemanticOperandV1::Copy(place(2, context_ref)),
+                            SemanticOperandV1::Copy(place(0, float)),
+                            SemanticOperandV1::Copy(place(8, word)),
+                        ],
+                        0,
+                        float,
+                        3,
+                    ),
+                ),
+                block(
+                    86,
+                    step,
+                    SemanticTerminatorKindV1::Goto(edge(
+                        SemanticEdgeRoleV1::Goto,
+                        if matches!(mutation, Mutation::ShiftCounterInitReentry) {
+                            5
+                        } else {
+                            1
+                        },
+                    )),
+                ),
+                block(
+                    87,
+                    vec![SemanticStatementV1::new(
+                        source,
+                        SemanticStatementKindV1::StorageDead(SemanticLocalIdV1::from_index(7)),
+                    )],
+                    SemanticTerminatorKindV1::Return,
+                ),
+                block(
+                    88,
+                    initialize,
+                    SemanticTerminatorKindV1::Goto(edge(SemanticEdgeRoleV1::Goto, 1)),
+                ),
             ]
         } else if raw {
-                vec![
-                    block(70,vec![assignment(6,word,SemanticRvalueKindV1::Use(
-                        SemanticOperandV1::Copy(SemanticPlaceV1::new(
-                            SemanticLocalIdV1::from_index(1),vec![
-                                SemanticProjectionV1::new(SemanticProjectionKindV1::Dereference,snapshot).unwrap(),
-                                SemanticProjectionV1::new(SemanticProjectionKindV1::Field(0),word).unwrap(),
-                            ],word).unwrap())))],
-                        call(4,vec![
-                            SemanticOperandV1::Copy(place(2,context_ref)),
-                            SemanticOperandV1::Copy(place(3,float)),
-                            SemanticOperandV1::Copy(place(6,word)),
-                        ],0,float,1)),
-                    block(71,vec![],SemanticTerminatorKindV1::Return),
-                ]
-            } else {
-                vec![block(70,helper_statements,SemanticTerminatorKindV1::Return)]
-            };
+            vec![
+                block(
+                    70,
+                    vec![assignment(
+                        6,
+                        word,
+                        SemanticRvalueKindV1::Use(SemanticOperandV1::Copy(
+                            SemanticPlaceV1::new(
+                                SemanticLocalIdV1::from_index(1),
+                                vec![
+                                    SemanticProjectionV1::new(
+                                        SemanticProjectionKindV1::Dereference,
+                                        snapshot,
+                                    )
+                                    .unwrap(),
+                                    SemanticProjectionV1::new(
+                                        SemanticProjectionKindV1::Field(0),
+                                        word,
+                                    )
+                                    .unwrap(),
+                                ],
+                                word,
+                            )
+                            .unwrap(),
+                        )),
+                    )],
+                    call(
+                        4,
+                        vec![
+                            SemanticOperandV1::Copy(place(2, context_ref)),
+                            SemanticOperandV1::Copy(place(3, float)),
+                            SemanticOperandV1::Copy(place(6, word)),
+                        ],
+                        0,
+                        float,
+                        1,
+                    ),
+                ),
+                block(71, vec![], SemanticTerminatorKindV1::Return),
+            ]
+        } else {
+            vec![block(
+                70,
+                helper_statements,
+                SemanticTerminatorKindV1::Return,
+            )]
+        };
         let helper = function(
             60,
             false,
@@ -3806,193 +4290,357 @@ mod tests {
         }
     }
     fn actual_raw_shuffle_whole_owner() -> ProductionSemanticKirOwnerV1 {
-        let source=fixture(Mutation::RawShuffle).expect("declared raw-shuffle semantic source must admit");
+        let source =
+            fixture(Mutation::RawShuffle).expect("declared raw-shuffle semantic source must admit");
         assert!(source.source_semantic().callables().iter().any(|callable|matches!(callable,
             SemanticCallableDeclV1::CompilerIntrinsic {operation:SemanticCompilerIntrinsicOperationV1::Gfx942Wave64ShuffleIndex {..},..})));
-        let semantic=source.into_source_owner().expect("original SSA replay before normal owner construction");
+        let semantic = source
+            .into_source_owner()
+            .expect("original SSA replay before normal owner construction");
         // Use the normal public constructor. A missing capture/transport step is
         // an actual test failure; no privately assembled owner may replace it.
-        let owner=ProductionSemanticKirOwnerV1::try_lower(semantic,ProductionSemanticKirLimitsV1::default())
-            .expect("normal source-to-whole-owner raw-shuffle construction");
-        owner.verify_equivalence().expect("untouched whole-owner original-source replay");
-        assert_eq!(owner.module().kernels[0].workgroup_size,Some(WorkgroupSize::new(64,1,1)));
-        assert!(owner.module().functions.iter().flat_map(|f|f.body.iter()).flat_map(|b|&b.blocks)
-            .flat_map(|b|&b.operations).any(|op|matches!(op.kind,OperationKind::Wave(WaveOperation {
-                kind:WaveOperationKind::ShuffleIndex {..},..
-            }))));
+        let owner = ProductionSemanticKirOwnerV1::try_lower(
+            semantic,
+            ProductionSemanticKirLimitsV1::default(),
+        )
+        .expect("normal source-to-whole-owner raw-shuffle construction");
+        owner
+            .verify_equivalence()
+            .expect("untouched whole-owner original-source replay");
+        assert_eq!(
+            owner.module().kernels[0].workgroup_size,
+            Some(WorkgroupSize::new(64, 1, 1))
+        );
+        assert!(
+            owner
+                .module()
+                .functions
+                .iter()
+                .flat_map(|f| f.body.iter())
+                .flat_map(|b| &b.blocks)
+                .flat_map(|b| &b.operations)
+                .any(|op| matches!(
+                    op.kind,
+                    OperationKind::Wave(WaveOperation {
+                        kind: WaveOperationKind::ShuffleIndex { .. },
+                        ..
+                    })
+                ))
+        );
         owner
     }
     #[test]
     fn genuine_declared_raw_shuffle_constructs_and_replays_normal_whole_owner() {
         drop(actual_raw_shuffle_whole_owner());
     }
-    #[derive(Clone,Copy,Debug)]
-    enum WholeOwnerFault { Lane, Element, EntryEdge, Result, Continuation }
+    #[derive(Clone, Copy, Debug)]
+    enum WholeOwnerFault {
+        Lane,
+        Element,
+        EntryEdge,
+        Result,
+        Continuation,
+    }
     #[test]
     fn coherent_raw_shuffle_graph_changes_fail_original_whole_owner_replay() {
-        for fault in [WholeOwnerFault::Lane,WholeOwnerFault::Element,WholeOwnerFault::EntryEdge,
-            WholeOwnerFault::Result,WholeOwnerFault::Continuation] {
+        for fault in [
+            WholeOwnerFault::Lane,
+            WholeOwnerFault::Element,
+            WholeOwnerFault::EntryEdge,
+            WholeOwnerFault::Result,
+            WholeOwnerFault::Continuation,
+        ] {
             // Untouched public construction and whole-owner replay must succeed
             // before any negative mutation is permitted to count as evidence.
-            let mut owner=actual_raw_shuffle_whole_owner();
-            let mut module=owner.module().clone();
-            let root=module.functions.iter().position(|f|f.role==fe2o3_kernel_ir::FunctionRole::KernelEntry).unwrap();
-            let helper=module.functions.iter().position(|f|f.role==fe2o3_kernel_ir::FunctionRole::InternalHelper).unwrap();
+            let mut owner = actual_raw_shuffle_whole_owner();
+            let mut module = owner.module().clone();
+            let root = module
+                .functions
+                .iter()
+                .position(|f| f.role == fe2o3_kernel_ir::FunctionRole::KernelEntry)
+                .unwrap();
+            let helper = module
+                .functions
+                .iter()
+                .position(|f| f.role == fe2o3_kernel_ir::FunctionRole::InternalHelper)
+                .unwrap();
             match fault {
-                WholeOwnerFault::Lane|WholeOwnerFault::Element => {
-                    let body=module.functions[root].body.as_mut().unwrap();
-                    let block=body.blocks.iter_mut().find(|b|b.id==BlockId(2)).unwrap();
-                    let alternative=block.operations.iter().find_map(|op|match (&fault,&op.kind) {
-                        (WholeOwnerFault::Lane,OperationKind::Constant(Constant::U32(7)))=>Some(op.results[0].id),
-                        (WholeOwnerFault::Element,OperationKind::Constant(Constant::F32Bits(bits))) if *bits==0x40000000=>Some(op.results[0].id),
-                        _=>None,
-                    }).expect("distinct genuine dominating source value");
-                    let call=block.operations.iter_mut().find(|op|matches!(op.kind,OperationKind::Call {..})).unwrap();
-                    let OperationKind::Call {arguments,..}=&mut call.kind else {unreachable!()};
-                    let ordinal=usize::from(matches!(fault,WholeOwnerFault::Element));
-                    assert_ne!(arguments[ordinal],alternative);
-                    arguments[ordinal]=alternative;
+                WholeOwnerFault::Lane | WholeOwnerFault::Element => {
+                    let body = module.functions[root].body.as_mut().unwrap();
+                    let block = body.blocks.iter_mut().find(|b| b.id == BlockId(2)).unwrap();
+                    let alternative = block
+                        .operations
+                        .iter()
+                        .find_map(|op| match (&fault, &op.kind) {
+                            (WholeOwnerFault::Lane, OperationKind::Constant(Constant::U32(7))) => {
+                                Some(op.results[0].id)
+                            }
+                            (
+                                WholeOwnerFault::Element,
+                                OperationKind::Constant(Constant::F32Bits(bits)),
+                            ) if *bits == 0x40000000 => Some(op.results[0].id),
+                            _ => None,
+                        })
+                        .expect("distinct genuine dominating source value");
+                    let call = block
+                        .operations
+                        .iter_mut()
+                        .find(|op| matches!(op.kind, OperationKind::Call { .. }))
+                        .unwrap();
+                    let OperationKind::Call { arguments, .. } = &mut call.kind else {
+                        unreachable!()
+                    };
+                    let ordinal = usize::from(matches!(fault, WholeOwnerFault::Element));
+                    assert_ne!(arguments[ordinal], alternative);
+                    arguments[ordinal] = alternative;
                 }
                 WholeOwnerFault::EntryEdge => {
-                    let block=module.functions[root].body.as_mut().unwrap().blocks.iter_mut().find(|b|b.id==BlockId(0)).unwrap();
-                    let Some(Terminator::Branch {target,..})=&mut block.terminator else {panic!("source issuer normal entry edge")};
-                    assert_eq!(*target,BlockId(1));*target=BlockId(2);
+                    let block = module.functions[root]
+                        .body
+                        .as_mut()
+                        .unwrap()
+                        .blocks
+                        .iter_mut()
+                        .find(|b| b.id == BlockId(0))
+                        .unwrap();
+                    let Some(Terminator::Branch { target, .. }) = &mut block.terminator else {
+                        panic!("source issuer normal entry edge")
+                    };
+                    assert_eq!(*target, BlockId(1));
+                    *target = BlockId(2);
                 }
                 WholeOwnerFault::Result => {
-                    let function=&mut module.functions[helper];
-                    let input=function.body.as_ref().unwrap().parameters[1];
-                    let block=function.body.as_mut().unwrap().blocks.iter_mut().find(|b|b.id==BlockId(1)).unwrap();
-                    let Some(Terminator::Return {values})=&mut block.terminator else {panic!("actual shuffle result return")};
-                    assert_eq!(values.len(),1);assert_ne!(values[0],input);values[0]=input;
+                    let function = &mut module.functions[helper];
+                    let input = function.body.as_ref().unwrap().parameters[1];
+                    let block = function
+                        .body
+                        .as_mut()
+                        .unwrap()
+                        .blocks
+                        .iter_mut()
+                        .find(|b| b.id == BlockId(1))
+                        .unwrap();
+                    let Some(Terminator::Return { values }) = &mut block.terminator else {
+                        panic!("actual shuffle result return")
+                    };
+                    assert_eq!(values.len(), 1);
+                    assert_ne!(values[0], input);
+                    values[0] = input;
                 }
                 WholeOwnerFault::Continuation => {
-                    let block=module.functions[root].body.as_mut().unwrap().blocks.iter_mut().find(|b|b.id==BlockId(2)).unwrap();
-                    let Some(Terminator::Branch {target,..})=&mut block.terminator else {panic!("source Defined-call normal continuation")};
-                    assert_eq!(*target,BlockId(3));*target=BlockId(4);
+                    let block = module.functions[root]
+                        .body
+                        .as_mut()
+                        .unwrap()
+                        .blocks
+                        .iter_mut()
+                        .find(|b| b.id == BlockId(2))
+                        .unwrap();
+                    let Some(Terminator::Branch { target, .. }) = &mut block.terminator else {
+                        panic!("source Defined-call normal continuation")
+                    };
+                    assert_eq!(*target, BlockId(3));
+                    *target = BlockId(4);
                 }
             }
-            verify_module(&module).unwrap_or_else(|e|panic!("{fault:?} must remain typed KIR: {e:?}"));
+            verify_module(&module)
+                .unwrap_or_else(|e| panic!("{fault:?} must remain typed KIR: {e:?}"));
             // Keep canonical graph bytes coherent with the changed module.
             // The immutable semantic source/SSA owner is deliberately untouched.
-            owner.canonical_kernel_ir=ProductionCanonicalKernelIrV1::from_module(module.clone())
-                .unwrap_or_else(|e|panic!("{fault:?} must retain canonical graph admission: {e:?}"));
-            owner.module=RetainedProductionKirModuleV1::Legacy(module);
+            owner.canonical_kernel_ir = ProductionCanonicalKernelIrV1::from_module(module.clone())
+                .unwrap_or_else(|e| {
+                    panic!("{fault:?} must retain canonical graph admission: {e:?}")
+                });
+            owner.module = RetainedProductionKirModuleV1::Legacy(module);
             owner.canonical_kernel_ir.revalidate().unwrap();
-            assert!(matches!(owner.verify_equivalence(),Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch)),
-                "{fault:?} escaped full immutable-source owner replay");
+            assert!(
+                matches!(
+                    owner.verify_equivalence(),
+                    Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch)
+                ),
+                "{fault:?} escaped full immutable-source owner replay"
+            );
         }
     }
 
-
-#[test]
-fn non_raw_captured_source_keeps_legacy_helper_and_parameter_accounting() {
-    let owner = fixture(Mutation::None).expect("ordinary admitted source owner");
-    assert!(owner.occurrence_storage().is_some());
-    assert!(!super::super::ordinary_source_has_raw_wave64_shuffle_v1(owner.source_semantic()));
-    let mut work = Work::new(0);
-    let mut budget = Budget::new(&mut work, 0);
-    let mut closure = super::super::ReachableClosureBudgetV1::new(0);
-    let plan = super::super::checked_wave64_helper_parameter_plan_v1(
-        &owner, SemanticFunctionIdV1::from_index(0), SemanticFunctionIdV1::from_index(1),
-        FunctionId::new("ordinary_non_raw_control"), 0, &mut closure, &mut budget,
-    ).expect("non-raw source must not query the nominal helper view");
-    assert!(plan.is_none());
-    assert_eq!(budget.work(), 0);
-    assert_eq!(budget.storage(), 0);
-    assert!(budget.failed_work().is_none());
-    assert!(budget.failed_storage().is_none());
-
-    let target = Function::internal_helper(FunctionId::new("ordinary_non_raw_control"),
-        Signature::new(vec![Type::Scalar(ScalarType::U32),Type::Scalar(ScalarType::F32)], vec![Type::Scalar(ScalarType::F32)]),
-        vec![ValueId(1),ValueId(3)], vec![]);
-    let instance = super::super::SemanticKirFunctionCorrespondenceV1 {
-        correspondence_owner: SemanticFunctionIdV1::from_index(0),
-        semantic_function: SemanticFunctionIdV1::from_index(1),
-        kernel_ir_function: target.id.clone(),
-        role: super::super::SemanticKirFunctionRoleV1::InternalHelper,
-    };
-    let mut direct_work=Work::new(10_000_000);
-    let mut wrapped_work=Work::new(10_000_000);
-    let mut direct_budget=Budget::new(&mut direct_work,10_000_000);
-    let mut wrapped_budget=Budget::new(&mut wrapped_work,10_000_000);
-    let direct=super::super::validate_parameter_correspondence_v1(owner.source_semantic(),&instance,&target,
-        super::super::ArgumentTraceV1 {direct:&[],components:&[],ignored:&[]},&mut direct_budget);
-    let wrapped=super::super::validate_parameter_correspondence_with_wave64_v1(&owner,&instance,&target,
-        super::super::ArgumentTraceV1 {direct:&[],components:&[],ignored:&[]},&mut wrapped_budget);
-    assert_eq!(format!("{direct:?}"),format!("{wrapped:?}"));
-    assert_eq!(direct_budget.work(),wrapped_budget.work());
-    assert_eq!(direct_budget.storage(),wrapped_budget.storage());
-    assert_eq!(direct_budget.failed_work(),wrapped_budget.failed_work());
-    assert_eq!(direct_budget.failed_storage(),wrapped_budget.failed_storage());
-}
-
-#[test]
-fn retained_source_input_refunds_actual_receipt_on_success_and_error() {
-    let owner=fixture(Mutation::RawShuffle).expect("genuine admitted raw-shuffle source owner");
-    assert!(super::super::ordinary_source_has_raw_wave64_shuffle_v1(owner.source_semantic()));
-    let receipt=owner.occurrence_storage().expect("real captured input receipt");
-    let held=receipt.retained_storage();
-    assert!(held>0);
-    for refuse in [false,true] {
-        let mut work=Work::new(100);
-        let mut budget=Budget::new(&mut work,11+held+7);
-        budget.reserve_storage(11).unwrap();
-        let ledger=budget.work_ledger_identity_v1();
-        let mut entered=false;
-        let result=super::super::with_wave64_retained_source_input_v1(&owner,&mut budget,|budget| {
-            entered=true;
-            assert_eq!(budget.storage(),11+held);
-            budget.reserve_storage(7)?;
-            // The body owns this distinct output/scratch charge. On failure
-            // it drops/refunds its scratch before returning; success retains it.
-            if refuse { budget.release_storage(7)?; return Err(super::super::ProductionSemanticKirErrorV1::CorrespondenceMismatch); }
-            Ok(29u32)
-        });
-        assert!(entered);
-        if refuse {
-            assert!(matches!(result, Err(super::super::ProductionSemanticKirErrorV1::CorrespondenceMismatch)));
-        } else {
-            assert!(matches!(result, Ok(29)));
-        }
-        assert_eq!(budget.storage(),11+if refuse {0}else{7});
-        assert!(budget.work_ledger_identity_v1()==ledger);
+    #[test]
+    fn non_raw_captured_source_keeps_legacy_helper_and_parameter_accounting() {
+        let owner = fixture(Mutation::None).expect("ordinary admitted source owner");
+        assert!(owner.occurrence_storage().is_some());
+        assert!(!super::super::ordinary_source_has_raw_wave64_shuffle_v1(
+            owner.source_semantic()
+        ));
+        let mut work = Work::new(0);
+        let mut budget = Budget::new(&mut work, 0);
+        let mut closure = super::super::ReachableClosureBudgetV1::new(0);
+        let plan = super::super::checked_wave64_helper_parameter_plan_v1(
+            &owner,
+            SemanticFunctionIdV1::from_index(0),
+            SemanticFunctionIdV1::from_index(1),
+            FunctionId::new("ordinary_non_raw_control"),
+            0,
+            &mut closure,
+            &mut budget,
+        )
+        .expect("non-raw source must not query the nominal helper view");
+        assert!(plan.is_none());
+        assert_eq!(budget.work(), 0);
+        assert_eq!(budget.storage(), 0);
         assert!(budget.failed_work().is_none());
         assert!(budget.failed_storage().is_none());
-        assert_eq!(owner.occurrence_storage().unwrap().retained_storage(),held);
-    }
-}
 
-#[test]
-fn retained_source_input_one_under_refuses_before_callback_and_preserves_failure_history() {
-    let owner=fixture(Mutation::RawShuffle).expect("genuine admitted raw-shuffle source owner");
-    let held=owner.occurrence_storage().unwrap().retained_storage();
-    assert!(held>0);
-    let mut work=Work::new(100);
-    let mut budget=Budget::new(&mut work,11+held-1);
-    budget.reserve_storage(11).unwrap();
-    let mut entered=false;
-    let result=super::super::with_wave64_retained_source_input_v1(&owner,&mut budget,|_| {
-        entered=true;Ok(())
-    });
-    assert!(matches!(result, Err(super::super::ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(Resource::Storage(_)))));
-    assert!(!entered);
-    assert_eq!(budget.storage(),11);
-    assert_eq!(budget.failed_storage(),Some(11+held));
-    assert!(budget.failed_work().is_none());
-    drop(budget);
-    let mut work=Work::new(0);
-    let mut budget=Budget::new(&mut work,11+held);
-    budget.reserve_storage(11).unwrap();
-    let mut entered=false;
-    let result=super::super::with_wave64_retained_source_input_v1(&owner,&mut budget,|budget| {
-        entered=true;budget.charge_work(1)?;Ok(())
-    });
-    assert!(matches!(result, Err(super::super::ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(Resource::Work(_)))));
-    assert!(entered);
-    assert_eq!(budget.storage(),11);
-    assert_eq!(budget.failed_work(),Some(1));
-    assert!(budget.failed_storage().is_none());
-}
+        let target = Function::internal_helper(
+            FunctionId::new("ordinary_non_raw_control"),
+            Signature::new(
+                vec![Type::Scalar(ScalarType::U32), Type::Scalar(ScalarType::F32)],
+                vec![Type::Scalar(ScalarType::F32)],
+            ),
+            vec![ValueId(1), ValueId(3)],
+            vec![],
+        );
+        let instance = super::super::SemanticKirFunctionCorrespondenceV1 {
+            correspondence_owner: SemanticFunctionIdV1::from_index(0),
+            semantic_function: SemanticFunctionIdV1::from_index(1),
+            kernel_ir_function: target.id.clone(),
+            role: super::super::SemanticKirFunctionRoleV1::InternalHelper,
+        };
+        let mut direct_work = Work::new(10_000_000);
+        let mut wrapped_work = Work::new(10_000_000);
+        let mut direct_budget = Budget::new(&mut direct_work, 10_000_000);
+        let mut wrapped_budget = Budget::new(&mut wrapped_work, 10_000_000);
+        let direct = super::super::validate_parameter_correspondence_v1(
+            owner.source_semantic(),
+            &instance,
+            &target,
+            super::super::ArgumentTraceV1 {
+                direct: &[],
+                components: &[],
+                ignored: &[],
+            },
+            &mut direct_budget,
+        );
+        let wrapped = super::super::validate_parameter_correspondence_with_wave64_v1(
+            &owner,
+            &instance,
+            &target,
+            super::super::ArgumentTraceV1 {
+                direct: &[],
+                components: &[],
+                ignored: &[],
+            },
+            &mut wrapped_budget,
+        );
+        assert_eq!(format!("{direct:?}"), format!("{wrapped:?}"));
+        assert_eq!(direct_budget.work(), wrapped_budget.work());
+        assert_eq!(direct_budget.storage(), wrapped_budget.storage());
+        assert_eq!(direct_budget.failed_work(), wrapped_budget.failed_work());
+        assert_eq!(
+            direct_budget.failed_storage(),
+            wrapped_budget.failed_storage()
+        );
+    }
+
+    #[test]
+    fn retained_source_input_refunds_actual_receipt_on_success_and_error() {
+        let owner =
+            fixture(Mutation::RawShuffle).expect("genuine admitted raw-shuffle source owner");
+        assert!(super::super::ordinary_source_has_raw_wave64_shuffle_v1(
+            owner.source_semantic()
+        ));
+        let receipt = owner
+            .occurrence_storage()
+            .expect("real captured input receipt");
+        let held = receipt.retained_storage();
+        assert!(held > 0);
+        for refuse in [false, true] {
+            let mut work = Work::new(100);
+            let mut budget = Budget::new(&mut work, 11 + held + 7);
+            budget.reserve_storage(11).unwrap();
+            let ledger = budget.work_ledger_identity_v1();
+            let mut entered = false;
+            let result =
+                super::super::with_wave64_retained_source_input_v1(&owner, &mut budget, |budget| {
+                    entered = true;
+                    assert_eq!(budget.storage(), 11 + held);
+                    budget.reserve_storage(7)?;
+                    // The body owns this distinct output/scratch charge. On failure
+                    // it drops/refunds its scratch before returning; success retains it.
+                    if refuse {
+                        budget.release_storage(7)?;
+                        return Err(
+                            super::super::ProductionSemanticKirErrorV1::CorrespondenceMismatch,
+                        );
+                    }
+                    Ok(29u32)
+                });
+            assert!(entered);
+            if refuse {
+                assert!(matches!(
+                    result,
+                    Err(super::super::ProductionSemanticKirErrorV1::CorrespondenceMismatch)
+                ));
+            } else {
+                assert!(matches!(result, Ok(29)));
+            }
+            assert_eq!(budget.storage(), 11 + if refuse { 0 } else { 7 });
+            assert!(budget.work_ledger_identity_v1() == ledger);
+            assert!(budget.failed_work().is_none());
+            assert!(budget.failed_storage().is_none());
+            assert_eq!(owner.occurrence_storage().unwrap().retained_storage(), held);
+        }
+    }
+
+    #[test]
+    fn retained_source_input_one_under_refuses_before_callback_and_preserves_failure_history() {
+        let owner =
+            fixture(Mutation::RawShuffle).expect("genuine admitted raw-shuffle source owner");
+        let held = owner.occurrence_storage().unwrap().retained_storage();
+        assert!(held > 0);
+        let mut work = Work::new(100);
+        let mut budget = Budget::new(&mut work, 11 + held - 1);
+        budget.reserve_storage(11).unwrap();
+        let mut entered = false;
+        let result =
+            super::super::with_wave64_retained_source_input_v1(&owner, &mut budget, |_| {
+                entered = true;
+                Ok(())
+            });
+        assert!(matches!(
+            result,
+            Err(
+                super::super::ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                    Resource::Storage(_)
+                )
+            )
+        ));
+        assert!(!entered);
+        assert_eq!(budget.storage(), 11);
+        assert_eq!(budget.failed_storage(), Some(11 + held));
+        assert!(budget.failed_work().is_none());
+        drop(budget);
+        let mut work = Work::new(0);
+        let mut budget = Budget::new(&mut work, 11 + held);
+        budget.reserve_storage(11).unwrap();
+        let mut entered = false;
+        let result =
+            super::super::with_wave64_retained_source_input_v1(&owner, &mut budget, |budget| {
+                entered = true;
+                budget.charge_work(1)?;
+                Ok(())
+            });
+        assert!(matches!(
+            result,
+            Err(
+                super::super::ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(
+                    Resource::Work(_)
+                )
+            )
+        ));
+        assert!(entered);
+        assert_eq!(budget.storage(), 11);
+        assert_eq!(budget.failed_work(), Some(1));
+        assert!(budget.failed_storage().is_none());
+    }
 
     #[test]
     fn issued_lane_field_is_plain_arithmetic_and_refuses_foreign_shapes() {
@@ -4003,17 +4651,49 @@ fn retained_source_input_one_under_refuses_before_callback_and_preserves_failure
         let word = SemanticTypeIdV1::from_index(1);
         let float = SemanticTypeIdV1::from_index(2);
         let snapshot = SemanticTypeIdV1::from_index(5);
-        let projection = SemanticProjectionV1::new(SemanticProjectionKindV1::Field(0), word).unwrap();
-        let lane = SemanticValueBindingV1::WaveLane { value: ValueId(42), wave: SemanticCurrentWaveV1::new(64) };
+        let projection =
+            SemanticProjectionV1::new(SemanticProjectionKindV1::Field(0), word).unwrap();
+        let lane = SemanticValueBindingV1::WaveLane {
+            value: ValueId(42),
+            wave: SemanticCurrentWaveV1::new(64),
+        };
         let mut work = Work::new(1_000_000);
         let mut budget = Budget::new(&mut work, 1_000_000);
-        let issued = super::super::compiler_issued_ssa_bindings_v1(types, semantic.callables(),
-            &semantic.functions()[0], SemanticFunctionIdV1::from_index(0), None, Some(&mut budget)).unwrap();
-        let arithmetic = super::super::wave_lane_arithmetic_field_v1(types, &issued, carrier,
-            &projection, &lane, &mut budget).unwrap().expect("exact source lane field");
-        assert!(matches!(arithmetic, SemanticValueBindingV1::Value { id: ValueId(42), ty: Type::Scalar(ScalarType::U32) }));
-        assert!(super::super::require_current_wave_lane(SemanticBlockIdV1::from_index(0), arithmetic, 64,
-            "arithmetic observation is not lane authority").is_err());
+        let issued = super::super::compiler_issued_ssa_bindings_v1(
+            types,
+            semantic.callables(),
+            &semantic.functions()[0],
+            SemanticFunctionIdV1::from_index(0),
+            None,
+            Some(&mut budget),
+        )
+        .unwrap();
+        let arithmetic = super::super::wave_lane_arithmetic_field_v1(
+            types,
+            &issued,
+            carrier,
+            &projection,
+            &lane,
+            &mut budget,
+        )
+        .unwrap()
+        .expect("exact source lane field");
+        assert!(matches!(
+            arithmetic,
+            SemanticValueBindingV1::Value {
+                id: ValueId(42),
+                ty: Type::Scalar(ScalarType::U32)
+            }
+        ));
+        assert!(
+            super::super::require_current_wave_lane(
+                SemanticBlockIdV1::from_index(0),
+                arithmetic,
+                64,
+                "arithmetic observation is not lane authority"
+            )
+            .is_err()
+        );
         for fault in 0..9 {
             let mut bindings = issued.clone();
             let mut source_types = types.to_vec();
@@ -4022,77 +4702,180 @@ fn retained_source_input_one_under_refuses_before_callback_and_preserves_failure
             let mut source_binding = lane.clone();
             match fault {
                 0 => bindings.clear(),
-                1 => { bindings.insert(carrier, SemanticPromotedBindingV1::Ordinary); }
-                2 => { bindings.insert(carrier, SemanticPromotedBindingV1::WaveLane { wave_width: 32 }); }
-                3 => source_binding = SemanticValueBindingV1::WaveLane { value: ValueId(42), wave: SemanticCurrentWaveV1::new(32) },
+                1 => {
+                    bindings.insert(carrier, SemanticPromotedBindingV1::Ordinary);
+                }
+                2 => {
+                    bindings.insert(
+                        carrier,
+                        SemanticPromotedBindingV1::WaveLane { wave_width: 32 },
+                    );
+                }
+                3 => {
+                    source_binding = SemanticValueBindingV1::WaveLane {
+                        value: ValueId(42),
+                        wave: SemanticCurrentWaveV1::new(32),
+                    }
+                }
                 4 => source_carrier = snapshot,
-                5 => field = SemanticProjectionV1::new(SemanticProjectionKindV1::Field(1), word).unwrap(),
-                6 => field = SemanticProjectionV1::new(SemanticProjectionKindV1::Field(0), float).unwrap(),
-                7 => source_binding = SemanticValueBindingV1::Value { id: ValueId(42), ty: Type::Scalar(ScalarType::U32) },
+                5 => {
+                    field =
+                        SemanticProjectionV1::new(SemanticProjectionKindV1::Field(1), word).unwrap()
+                }
+                6 => {
+                    field = SemanticProjectionV1::new(SemanticProjectionKindV1::Field(0), float)
+                        .unwrap()
+                }
+                7 => {
+                    source_binding = SemanticValueBindingV1::Value {
+                        id: ValueId(42),
+                        ty: Type::Scalar(ScalarType::U32),
+                    }
+                }
                 8 => source_types[word.index() as usize] = types[float.index() as usize].clone(),
                 _ => unreachable!(),
             }
-            assert!(super::super::wave_lane_arithmetic_field_v1(&source_types, &bindings, source_carrier,
-                &field, &source_binding, &mut budget).unwrap().is_none(), "field mutation {fault}");
+            assert!(
+                super::super::wave_lane_arithmetic_field_v1(
+                    &source_types,
+                    &bindings,
+                    source_carrier,
+                    &field,
+                    &source_binding,
+                    &mut budget
+                )
+                .unwrap()
+                .is_none(),
+                "field mutation {fault}"
+            );
         }
         let mut denied_work = Work::new(0);
         let mut denied = Budget::new(&mut denied_work, 0);
-        assert!(super::super::wave_lane_arithmetic_field_v1(types, &issued, carrier,
-            &projection, &lane, &mut denied).is_err());
+        assert!(
+            super::super::wave_lane_arithmetic_field_v1(
+                types,
+                &issued,
+                carrier,
+                &projection,
+                &lane,
+                &mut denied
+            )
+            .is_err()
+        );
         assert_eq!(denied.failed_work(), Some(4));
         assert_eq!(denied.storage(), 0);
     }
 
     #[test]
     fn snapshot_storage_end_requires_a_terminal_suffix_after_every_original_use() {
-        for mutation in [Mutation::TerminalDeadSnapshot, Mutation::RawShuffleTerminalDeadSnapshot] {
+        for mutation in [
+            Mutation::TerminalDeadSnapshot,
+            Mutation::RawShuffleTerminalDeadSnapshot,
+        ] {
             let owner = fixture(mutation).unwrap_or_else(|e| panic!("{mutation:?}: {e}"));
             check(&owner).unwrap_or_else(|e| panic!("{mutation:?}: {e:?}"));
             if matches!(mutation, Mutation::RawShuffleTerminalDeadSnapshot) {
                 let semantic = owner.into_source_owner().expect("original source replay");
-                let whole = ProductionSemanticKirOwnerV1::try_lower(semantic, ProductionSemanticKirLimitsV1::default())
-                    .expect("normal whole-owner construction with terminal snapshot storage end");
-                whole.verify_equivalence().expect("whole-owner replay with terminal snapshot storage end");
-                assert!(whole.module().functions.iter().flat_map(|function| function.body.iter())
-                    .flat_map(|body| &body.blocks).flat_map(|block| &block.operations)
-                    .any(|operation| matches!(operation.kind, OperationKind::Wave(WaveOperation {
-                        kind: WaveOperationKind::ShuffleIndex { .. }, ..
-                    }))));
+                let whole = ProductionSemanticKirOwnerV1::try_lower(
+                    semantic,
+                    ProductionSemanticKirLimitsV1::default(),
+                )
+                .expect("normal whole-owner construction with terminal snapshot storage end");
+                whole
+                    .verify_equivalence()
+                    .expect("whole-owner replay with terminal snapshot storage end");
+                assert!(
+                    whole
+                        .module()
+                        .functions
+                        .iter()
+                        .flat_map(|function| function.body.iter())
+                        .flat_map(|body| &body.blocks)
+                        .flat_map(|block| &block.operations)
+                        .any(|operation| matches!(
+                            operation.kind,
+                            OperationKind::Wave(WaveOperation {
+                                kind: WaveOperationKind::ShuffleIndex { .. },
+                                ..
+                            })
+                        ))
+                );
             }
         }
-        for mutation in [Mutation::StorageDeadSnapshot, Mutation::DeadSnapshotFutureRead,
-            Mutation::DeadSnapshotBackedge, Mutation::DeadLiveSnapshot,
-            Mutation::TerminalDeadSnapshotAliasCopy, Mutation::TerminalDeadSnapshotRawAlias,
-            Mutation::TerminalDeadSnapshotFormalRawAlias] {
+        for mutation in [
+            Mutation::StorageDeadSnapshot,
+            Mutation::DeadSnapshotFutureRead,
+            Mutation::DeadSnapshotBackedge,
+            Mutation::DeadLiveSnapshot,
+            Mutation::TerminalDeadSnapshotAliasCopy,
+            Mutation::TerminalDeadSnapshotRawAlias,
+            Mutation::TerminalDeadSnapshotFormalRawAlias,
+        ] {
             let owner = fixture(mutation).unwrap_or_else(|e| panic!("{mutation:?}: {e}"));
-            assert!(matches!(check(&owner), Err(ReferenceErrorV1::Unavailable(_))), "{mutation:?}");
+            assert!(
+                matches!(check(&owner), Err(ReferenceErrorV1::Unavailable(_))),
+                "{mutation:?}"
+            );
         }
-        let unreachable = fixture(Mutation::DeadSnapshotUnreachableIncoming).expect("unreachable call source admits");
+        let unreachable = fixture(Mutation::DeadSnapshotUnreachableIncoming)
+            .expect("unreachable call source admits");
         check(&unreachable).expect("first reachable call is genuine");
         let mut work = Work::new(10_000_000);
         let mut budget = Budget::new(&mut work, 10_000_000);
-        budget.reserve_storage(unreachable.occurrence_storage().unwrap().retained_storage()).unwrap();
-        assert!(matches!(with_checked_reference_helper_v1(&unreachable,
-            SemanticFunctionIdV1::from_index(1), &mut budget, |_, _| Ok(())),
-            Err(ReferenceErrorV1::Unavailable(_))));
+        budget
+            .reserve_storage(unreachable.occurrence_storage().unwrap().retained_storage())
+            .unwrap();
+        assert!(matches!(
+            with_checked_reference_helper_v1(
+                &unreachable,
+                SemanticFunctionIdV1::from_index(1),
+                &mut budget,
+                |_, _| Ok(())
+            ),
+            Err(ReferenceErrorV1::Unavailable(_))
+        ));
         let owner = fixture(Mutation::TerminalDeadSnapshot).unwrap();
-        let resolver = Resolver { owner: &owner, root: SemanticFunctionIdV1::from_index(0), visits: 0 };
+        let resolver = Resolver {
+            owner: &owner,
+            root: SemanticFunctionIdV1::from_index(0),
+            visits: 0,
+        };
         let mut zero_work = Work::new(0);
         let mut denied = Budget::new(&mut zero_work, 0);
-        assert!(matches!(resolver.require_snapshot_dead_suffix(SemanticFunctionIdV1::from_index(0),
-            SemanticLocalIdV1::from_index(3), 3, 0, &mut denied), Err(ReferenceErrorV1::Resource(Resource::Work(_)))));
+        assert!(matches!(
+            resolver.require_snapshot_dead_suffix(
+                SemanticFunctionIdV1::from_index(0),
+                SemanticLocalIdV1::from_index(3),
+                3,
+                0,
+                &mut denied
+            ),
+            Err(ReferenceErrorV1::Resource(Resource::Work(_)))
+        ));
         assert_eq!(denied.failed_work(), Some(1));
         assert_eq!(denied.storage(), 0);
     }
 
-    fn original_holder_borrow(owner: &ProductionSemanticSsaOwnerV1, local: u32) -> (SemanticBlockIdV1, u32) {
+    fn original_holder_borrow(
+        owner: &ProductionSemanticSsaOwnerV1,
+        local: u32,
+    ) -> (SemanticBlockIdV1, u32) {
         let mut original = None;
-        for (bi, block) in owner.source_semantic().functions()[0].blocks().iter().enumerate() {
+        for (bi, block) in owner.source_semantic().functions()[0]
+            .blocks()
+            .iter()
+            .enumerate()
+        {
             for (si, statement) in block.statements().iter().enumerate() {
                 if matches!(statement.kind(), SemanticStatementKindV1::Assign(assignment)
                     if assignment.destination().local().index() == local && matches!(assignment.value().kind(),
-                        SemanticRvalueKindV1::Borrow { kind: SemanticBorrowKindV1::Shared, .. })) {
-                    assert!(original.replace((SemanticBlockIdV1::from_index(bi as u32), si as u32)).is_none());
+                        SemanticRvalueKindV1::Borrow { kind: SemanticBorrowKindV1::Shared, .. }))
+                {
+                    assert!(
+                        original
+                            .replace((SemanticBlockIdV1::from_index(bi as u32), si as u32))
+                            .is_none()
+                    );
                 }
             }
         }
@@ -4100,52 +4883,112 @@ fn retained_source_input_one_under_refuses_before_callback_and_preserves_failure
     }
     #[test]
     fn holder_initial_live_and_terminal_dead_preserve_actual_source_and_whole_owner() {
-        for mutation in [Mutation::HolderEntryLive, Mutation::HolderLocalLive,
-            Mutation::HolderOrderedStorage, Mutation::RawShuffleHolderOrderedStorage] {
+        for mutation in [
+            Mutation::HolderEntryLive,
+            Mutation::HolderLocalLive,
+            Mutation::HolderOrderedStorage,
+            Mutation::RawShuffleHolderOrderedStorage,
+        ] {
             let owner = fixture(mutation).unwrap_or_else(|error| panic!("{mutation:?}: {error}"));
             check(&owner).unwrap_or_else(|error| panic!("{mutation:?}: {error:?}"));
             let mut work = Work::new(10_000_000);
             let mut budget = Budget::new(&mut work, 10_000_000);
-            budget.reserve_storage(owner.occurrence_storage().unwrap().retained_storage()).unwrap();
-            with_checked_reference_call_v1(&owner, SemanticFunctionIdV1::from_index(0),
-                SemanticBlockIdV1::from_index(2), &mut budget, |view, budget| {
-                assert!(std::ptr::eq(view.owner(), &owner));
-                for local in [4, 5] {
-                    super::super::require_closed_wave64_reference_holder_v1(&owner,
-                        SemanticFunctionIdV1::from_index(0), local, Some(original_holder_borrow(&owner, local)), budget)
+            budget
+                .reserve_storage(owner.occurrence_storage().unwrap().retained_storage())
+                .unwrap();
+            with_checked_reference_call_v1(
+                &owner,
+                SemanticFunctionIdV1::from_index(0),
+                SemanticBlockIdV1::from_index(2),
+                &mut budget,
+                |view, budget| {
+                    assert!(std::ptr::eq(view.owner(), &owner));
+                    for local in [4, 5] {
+                        super::super::require_closed_wave64_reference_holder_v1(
+                            &owner,
+                            SemanticFunctionIdV1::from_index(0),
+                            local,
+                            Some(original_holder_borrow(&owner, local)),
+                            budget,
+                        )
                         .unwrap_or_else(|error| panic!("{mutation:?}, holder {local}: {error:?}"));
-                }
-                Ok(())
-            }).unwrap();
+                    }
+                    Ok(())
+                },
+            )
+            .unwrap();
             if matches!(mutation, Mutation::RawShuffleHolderOrderedStorage) {
-                let whole = ProductionSemanticKirOwnerV1::try_lower(owner.into_source_owner().unwrap(),
-                    ProductionSemanticKirLimitsV1::default()).expect("normal raw-shuffle owner with ordered holder storage");
-                whole.verify_equivalence().expect("independent whole-owner source replay");
-                assert!(whole.module().functions.iter().flat_map(|function| function.body.iter())
-                    .flat_map(|body| &body.blocks).flat_map(|block| &block.operations)
-                    .any(|operation| matches!(operation.kind, OperationKind::Wave(WaveOperation {
-                        kind: WaveOperationKind::ShuffleIndex { .. }, .. }))));
+                let whole = ProductionSemanticKirOwnerV1::try_lower(
+                    owner.into_source_owner().unwrap(),
+                    ProductionSemanticKirLimitsV1::default(),
+                )
+                .expect("normal raw-shuffle owner with ordered holder storage");
+                whole
+                    .verify_equivalence()
+                    .expect("independent whole-owner source replay");
+                assert!(
+                    whole
+                        .module()
+                        .functions
+                        .iter()
+                        .flat_map(|function| function.body.iter())
+                        .flat_map(|body| &body.blocks)
+                        .flat_map(|block| &block.operations)
+                        .any(|operation| matches!(
+                            operation.kind,
+                            OperationKind::Wave(WaveOperation {
+                                kind: WaveOperationKind::ShuffleIndex { .. },
+                                ..
+                            })
+                        ))
+                );
             }
         }
     }
     #[test]
     fn holder_ordering_rejects_restarts_cycles_unreachable_lives_aliases_and_formal_markers() {
-        for mutation in [Mutation::HolderLateLive, Mutation::HolderRestart, Mutation::HolderUnreachableLive,
-            Mutation::HolderLiveBackedge, Mutation::HolderDeadBackedge,
+        for mutation in [
+            Mutation::HolderLateLive,
+            Mutation::HolderRestart,
+            Mutation::HolderUnreachableLive,
+            Mutation::HolderLiveBackedge,
+            Mutation::HolderDeadBackedge,
             Mutation::HolderAliasInitialLive,
-            Mutation::HolderFormalLive, Mutation::HolderFormalDead] {
-            let owner = fixture(mutation).unwrap_or_else(|error| panic!("{mutation:?} must admit and capture original SSA: {error}"));
-            let formal = matches!(mutation, Mutation::HolderFormalLive | Mutation::HolderFormalDead);
-            let (function, local, borrow) = if formal { (1, 1, None) }
-                else { (0, 4, Some(original_holder_borrow(&owner, 4))) };
+            Mutation::HolderFormalLive,
+            Mutation::HolderFormalDead,
+        ] {
+            let owner = fixture(mutation).unwrap_or_else(|error| {
+                panic!("{mutation:?} must admit and capture original SSA: {error}")
+            });
+            let formal = matches!(
+                mutation,
+                Mutation::HolderFormalLive | Mutation::HolderFormalDead
+            );
+            let (function, local, borrow) = if formal {
+                (1, 1, None)
+            } else {
+                (0, 4, Some(original_holder_borrow(&owner, 4)))
+            };
             let mut work = Work::new(10_000_000);
             let mut budget = Budget::new(&mut work, 10_000_000);
-            budget.reserve_storage(owner.occurrence_storage().unwrap().retained_storage()).unwrap();
-            let result = super::super::require_closed_wave64_reference_holder_v1(&owner,
-                SemanticFunctionIdV1::from_index(function), local, borrow, &mut budget);
-            assert!(matches!(&result, Err(ProductionSemanticKirErrorV1::Unsupported { .. }
-                | ProductionSemanticKirErrorV1::CorrespondenceMismatch)),
-                "{mutation:?} must fail the semantic contract, not resource accounting: {result:?}");
+            budget
+                .reserve_storage(owner.occurrence_storage().unwrap().retained_storage())
+                .unwrap();
+            let result = super::super::require_closed_wave64_reference_holder_v1(
+                &owner,
+                SemanticFunctionIdV1::from_index(function),
+                local,
+                borrow,
+                &mut budget,
+            );
+            assert!(
+                matches!(
+                    &result,
+                    Err(ProductionSemanticKirErrorV1::Unsupported { .. }
+                        | ProductionSemanticKirErrorV1::CorrespondenceMismatch)
+                ),
+                "{mutation:?} must fail the semantic contract, not resource accounting: {result:?}"
+            );
         }
     }
     #[test]
@@ -4153,67 +4996,131 @@ fn retained_source_input_one_under_refuses_before_callback_and_preserves_failure
         // This source must fail in the original SSA planner, before a holder
         // relation can exist. Do not weaken admission to reach the later guard.
         match fixture(Mutation::HolderDeadBeforeCall) {
-            Err(error) => assert_eq!(error,
-                "Planner { function: SemanticFunctionIdV1(0), error: UndefinedAtUse { block: SsaBlockIdV1(2), event: 7, variable: SsaVariableIdV1(4) } }"),
+            Err(error) => assert_eq!(
+                error,
+                "Planner { function: SemanticFunctionIdV1(0), error: UndefinedAtUse { block: SsaBlockIdV1(2), event: 7, variable: SsaVariableIdV1(4) } }"
+            ),
             Ok(_) => panic!("original SSA accepted a call through a dead reference holder"),
         }
     }
 
     #[test]
     fn holder_storage_query_preserves_original_receipt_and_work_denial() {
-        let owner = fixture(Mutation::HolderOrderedStorage).expect("actual holder lifetime source owner");
+        let owner =
+            fixture(Mutation::HolderOrderedStorage).expect("actual holder lifetime source owner");
         let held = owner.occurrence_storage().unwrap().retained_storage();
         let borrow = original_holder_borrow(&owner, 4);
         let mut work = Work::new(0);
         let mut budget = Budget::new(&mut work, held);
         budget.reserve_storage(held).unwrap();
         let ledger = budget.work_ledger_identity_v1();
-        assert!(matches!(super::super::require_ordered_wave64_holder_storage_v1(&owner,
-            SemanticFunctionIdV1::from_index(0), 4, borrow, Some((0, 0)), &mut budget),
-            Err(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(Resource::Work(_)))));
+        assert!(matches!(
+            super::super::require_ordered_wave64_holder_storage_v1(
+                &owner,
+                SemanticFunctionIdV1::from_index(0),
+                4,
+                borrow,
+                Some((0, 0)),
+                &mut budget
+            ),
+            Err(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(Resource::Work(_)))
+        ));
         assert_eq!(budget.failed_work(), Some(4));
         assert_eq!(budget.storage(), held);
         assert!(budget.work_ledger_identity_v1() == ledger);
         let mut work = Work::new(100);
         let mut budget = Budget::new(&mut work, held - 1);
         budget.reserve_storage(held - 1).unwrap();
-        assert!(matches!(super::super::require_ordered_wave64_holder_storage_v1(&owner,
-            SemanticFunctionIdV1::from_index(0), 4, borrow, Some((0, 0)), &mut budget),
-            Err(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(Resource::Accounting))));
+        assert!(matches!(
+            super::super::require_ordered_wave64_holder_storage_v1(
+                &owner,
+                SemanticFunctionIdV1::from_index(0),
+                4,
+                borrow,
+                Some((0, 0)),
+                &mut budget
+            ),
+            Err(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(Resource::Accounting))
+        ));
         assert_eq!(budget.storage(), held - 1);
         assert!(budget.failed_storage().is_none());
     }
 
     #[test]
     fn decreasing_u32_counter_replays_genuine_raw_shuffle_whole_owner() {
-        let source = fixture(Mutation::ShiftCounter).expect("original loop source admission and SSA capture");
+        let source = fixture(Mutation::ShiftCounter)
+            .expect("original loop source admission and SSA capture");
         let held = source.occurrence_storage().unwrap().retained_storage();
         let mut work = Work::new(10_000_000);
         let mut budget = Budget::new(&mut work, 10_000_000);
         budget.reserve_storage(held).unwrap();
-        assert_eq!(super::super::checked_wave64_shift_counter_bound_v1(&source,
-            SemanticFunctionIdV1::from_index(1), 7, &mut budget).unwrap(), Some(33));
-        let owner = ProductionSemanticKirOwnerV1::try_lower(source.into_source_owner().unwrap(),
-            ProductionSemanticKirLimitsV1::default()).expect("public lowering of actual source loop and raw shuffle");
-        owner.verify_equivalence().expect("independent original-source whole-owner replay");
-        assert!(owner.module().functions.iter().flat_map(|function| function.body.iter())
-            .flat_map(|body| &body.blocks).flat_map(|block| &block.operations)
-            .any(|operation| matches!(operation.kind, OperationKind::Wave(WaveOperation {
-                kind: WaveOperationKind::ShuffleIndex { .. }, .. }))));
+        assert_eq!(
+            super::super::checked_wave64_shift_counter_bound_v1(
+                &source,
+                SemanticFunctionIdV1::from_index(1),
+                7,
+                &mut budget
+            )
+            .unwrap(),
+            Some(33)
+        );
+        let owner = ProductionSemanticKirOwnerV1::try_lower(
+            source.into_source_owner().unwrap(),
+            ProductionSemanticKirLimitsV1::default(),
+        )
+        .expect("public lowering of actual source loop and raw shuffle");
+        owner
+            .verify_equivalence()
+            .expect("independent original-source whole-owner replay");
+        assert!(
+            owner
+                .module()
+                .functions
+                .iter()
+                .flat_map(|function| function.body.iter())
+                .flat_map(|body| &body.blocks)
+                .flat_map(|block| &block.operations)
+                .any(|operation| matches!(
+                    operation.kind,
+                    OperationKind::Wave(WaveOperation {
+                        kind: WaveOperationKind::ShuffleIndex { .. },
+                        ..
+                    })
+                ))
+        );
     }
     #[test]
     fn decreasing_counter_contract_refuses_changed_source_and_aliases() {
-        for mutation in [Mutation::ShiftCounterZero, Mutation::ShiftCounterOverwide,
-            Mutation::ShiftCounterZeroShift, Mutation::ShiftCounterWideShift, Mutation::ShiftCounterDynamicShift,
-            Mutation::ShiftCounterReassign, Mutation::ShiftCounterInitReentry, Mutation::ShiftCounterBorrow,
-            Mutation::ShiftCounterRawAddress, Mutation::ShiftCounterSigned] {
-            let source = fixture(mutation).unwrap_or_else(|error| panic!("{mutation:?} must admit and capture before contract refusal: {error}"));
+        for mutation in [
+            Mutation::ShiftCounterZero,
+            Mutation::ShiftCounterOverwide,
+            Mutation::ShiftCounterZeroShift,
+            Mutation::ShiftCounterWideShift,
+            Mutation::ShiftCounterDynamicShift,
+            Mutation::ShiftCounterReassign,
+            Mutation::ShiftCounterInitReentry,
+            Mutation::ShiftCounterBorrow,
+            Mutation::ShiftCounterRawAddress,
+            Mutation::ShiftCounterSigned,
+        ] {
+            let source = fixture(mutation).unwrap_or_else(|error| {
+                panic!("{mutation:?} must admit and capture before contract refusal: {error}")
+            });
             let mut work = Work::new(10_000_000);
             let mut budget = Budget::new(&mut work, 10_000_000);
-            budget.reserve_storage(source.occurrence_storage().unwrap().retained_storage()).unwrap();
-            let result = super::super::checked_wave64_shift_counter_bound_v1(&source,
-                SemanticFunctionIdV1::from_index(1), 7, &mut budget);
-            assert!(matches!(&result, Ok(None)), "{mutation:?}: semantic refusal required, got {result:?}");
+            budget
+                .reserve_storage(source.occurrence_storage().unwrap().retained_storage())
+                .unwrap();
+            let result = super::super::checked_wave64_shift_counter_bound_v1(
+                &source,
+                SemanticFunctionIdV1::from_index(1),
+                7,
+                &mut budget,
+            );
+            assert!(
+                matches!(&result, Ok(None)),
+                "{mutation:?}: semantic refusal required, got {result:?}"
+            );
             assert!(budget.failed_work().is_none());
             assert!(budget.failed_storage().is_none());
         }
@@ -4222,8 +5129,14 @@ fn retained_source_input_one_under_refuses_before_callback_and_preserves_failure
     fn decreasing_counter_uses_exact_original_work_and_input_storage_limits() {
         let source = fixture(Mutation::ShiftCounter).unwrap();
         let held = source.occurrence_storage().unwrap().retained_storage();
-        let query = |budget: &mut Budget<'_>| super::super::checked_wave64_shift_counter_bound_v1(
-            &source, SemanticFunctionIdV1::from_index(1), 7, budget);
+        let query = |budget: &mut Budget<'_>| {
+            super::super::checked_wave64_shift_counter_bound_v1(
+                &source,
+                SemanticFunctionIdV1::from_index(1),
+                7,
+                budget,
+            )
+        };
         let mut work = Work::new(10_000_000);
         let mut budget = Budget::new(&mut work, held);
         budget.reserve_storage(held).unwrap();
@@ -4236,7 +5149,12 @@ fn retained_source_input_one_under_refuses_before_callback_and_preserves_failure
             let mut budget = Budget::new(&mut work, held);
             budget.reserve_storage(held).unwrap();
             let result = query(&mut budget);
-            assert!(matches!(result, Err(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(Resource::Work(_)))));
+            assert!(matches!(
+                result,
+                Err(
+                    ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(Resource::Work(_))
+                )
+            ));
             assert!(budget.failed_work().is_some());
             assert_eq!(budget.storage(), held);
         }
@@ -4247,7 +5165,10 @@ fn retained_source_input_one_under_refuses_before_callback_and_preserves_failure
         let mut work = Work::new(10_000_000);
         let mut budget = Budget::new(&mut work, held - 1);
         budget.reserve_storage(held - 1).unwrap();
-        assert!(matches!(query(&mut budget), Err(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(Resource::Accounting))));
+        assert!(matches!(
+            query(&mut budget),
+            Err(ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(Resource::Accounting))
+        ));
         assert_eq!(budget.storage(), held - 1);
     }
 }

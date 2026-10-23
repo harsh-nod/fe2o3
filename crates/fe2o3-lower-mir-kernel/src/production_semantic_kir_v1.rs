@@ -2110,11 +2110,12 @@ impl ProductionSemanticKirOwnerV1 {
             ProductionSemanticSsaLimitsV1::default(),
         )
         .map_err(ProductionSemanticKirErrorV1::SemanticSsa)?;
-        let (module, correspondence) = if ordinary_source_has_raw_wave64_shuffle_v1(semantic_ssa.source_semantic()) {
-            capture_and_lower_fresh_wave64_source_v1(&mut semantic_ssa, limits)?
-        } else {
-            lower_module(&semantic_ssa, limits, None)?
-        };
+        let (module, correspondence) =
+            if ordinary_source_has_raw_wave64_shuffle_v1(semantic_ssa.source_semantic()) {
+                capture_and_lower_fresh_wave64_source_v1(&mut semantic_ssa, limits)?
+            } else {
+                lower_module(&semantic_ssa, limits, None)?
+            };
         let canonical_kernel_ir = ProductionCanonicalKernelIrV1::from_module(module.clone())?;
         let owner = Self {
             semantic_ssa,
@@ -9076,217 +9077,219 @@ fn validate_semantic_kir_correspondence_after_source_replay_v1(
         limits.max_argument_correspondence_storage,
     );
     let mut check = |argument_budget: &mut ArgumentBudgetV1<'_>| {
-    require_execution_free_types_v29(semantic.types(), argument_budget)?;
-    argument_budget.reserve_storage(CallReturnBufferV1::bytes(
-        correspondence.call_returns.len(),
-        correspondence.call_result_components.len(),
-    )?)?;
-    argument_budget.charge_work(argument_sum_v1(&[
-        correspondence.parameter_bindings.len(),
-        correspondence.parameter_component_bindings.len(),
-        correspondence.ignored_parameter_bindings.len(),
-        correspondence.call_returns.len(),
-        argument_product_v1(expected_functions.len(), 4)?,
-    ])?)?;
-    let call_targets = CallTargetIndexV1::new(module, &expected_functions, argument_budget)?;
-    validate_call_component_pool_v1(
-        &correspondence.call_returns,
-        &correspondence.call_result_components,
-        argument_budget,
-    )?;
-    for expected_function in &expected_functions {
-        let correspondence_owner = match expected_function.role {
-            SemanticKirFunctionRoleV1::KernelEntry => semantic_roots_by_symbol
-                .get(expected_function.kernel_ir_function.as_str())
-                .copied()
-                .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?,
-            SemanticKirFunctionRoleV1::InternalHelper => expected_function.correspondence_owner,
-        };
-        let semantic_function = semantic
-            .functions()
-            .get(expected_function.semantic_function.index() as usize)
-            .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
-        let target =
-            call_targets.physical(&expected_function.kernel_ir_function, argument_budget)?;
-        if target.role
-            != match expected_function.role {
-                SemanticKirFunctionRoleV1::KernelEntry => {
-                    fe2o3_kernel_ir::FunctionRole::KernelEntry
+        require_execution_free_types_v29(semantic.types(), argument_budget)?;
+        argument_budget.reserve_storage(CallReturnBufferV1::bytes(
+            correspondence.call_returns.len(),
+            correspondence.call_result_components.len(),
+        )?)?;
+        argument_budget.charge_work(argument_sum_v1(&[
+            correspondence.parameter_bindings.len(),
+            correspondence.parameter_component_bindings.len(),
+            correspondence.ignored_parameter_bindings.len(),
+            correspondence.call_returns.len(),
+            argument_product_v1(expected_functions.len(), 4)?,
+        ])?)?;
+        let call_targets = CallTargetIndexV1::new(module, &expected_functions, argument_budget)?;
+        validate_call_component_pool_v1(
+            &correspondence.call_returns,
+            &correspondence.call_result_components,
+            argument_budget,
+        )?;
+        for expected_function in &expected_functions {
+            let correspondence_owner = match expected_function.role {
+                SemanticKirFunctionRoleV1::KernelEntry => semantic_roots_by_symbol
+                    .get(expected_function.kernel_ir_function.as_str())
+                    .copied()
+                    .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?,
+                SemanticKirFunctionRoleV1::InternalHelper => expected_function.correspondence_owner,
+            };
+            let semantic_function = semantic
+                .functions()
+                .get(expected_function.semantic_function.index() as usize)
+                .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+            let target =
+                call_targets.physical(&expected_function.kernel_ir_function, argument_budget)?;
+            if target.role
+                != match expected_function.role {
+                    SemanticKirFunctionRoleV1::KernelEntry => {
+                        fe2o3_kernel_ir::FunctionRole::KernelEntry
+                    }
+                    SemanticKirFunctionRoleV1::InternalHelper => {
+                        fe2o3_kernel_ir::FunctionRole::InternalHelper
+                    }
                 }
-                SemanticKirFunctionRoleV1::InternalHelper => {
-                    fe2o3_kernel_ir::FunctionRole::InternalHelper
-                }
+            {
+                return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
             }
+            let target_body = target
+                .body
+                .as_ref()
+                .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+            let order = owner
+                .plan_for_function(expected_function.semantic_function)
+                .filter(|plan| plan.function_identity() == semantic_function.identity())
+                .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?
+                .plan()
+                .reverse_postorder()
+                .iter()
+                .map(|block| SemanticBlockIdV1::from_index(block.get()));
+            let expected_blocks = order
+                .map(|semantic_block| {
+                    let source = semantic_function
+                        .blocks()
+                        .get(semantic_block.index() as usize)
+                        .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+                    Ok(ExpectedSemanticKirBlockCoverageV1 {
+                        correspondence_owner,
+                        semantic_function: expected_function.semantic_function,
+                        semantic_block,
+                        kernel_ir_block: BlockId(semantic_block.index()),
+                        source_statement_count: u32::try_from(source.statements().len())
+                            .map_err(|_| ProductionSemanticKirErrorV1::CorrespondenceMismatch)?,
+                    })
+                })
+                .collect::<Result<Vec<_>, ProductionSemanticKirErrorV1>>()?;
+            let statement_count = expected_blocks
+                .iter()
+                .try_fold(0_usize, |count, block| {
+                    count.checked_add(block.source_statement_count as usize)
+                })
+                .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+            let block_end = block_offset
+                .checked_add(expected_blocks.len())
+                .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+            let statement_end = statement_offset
+                .checked_add(statement_count)
+                .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+            let terminator_end = terminator_offset
+                .checked_add(expected_blocks.len())
+                .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+            let synthetic = correspondence
+                .synthetic_operation_spans
+                .iter()
+                .filter(|span| span.semantic_function == expected_function.semantic_function)
+                .filter(|span| span.correspondence_owner == correspondence_owner)
+                .cloned()
+                .collect::<Vec<_>>();
+            used_synthetic = used_synthetic
+                .checked_add(synthetic.len())
+                .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+            let runtime_assert_rule = synthetic
+                .iter()
+                .any(|span| {
+                    span.rule == SemanticKirSyntheticOperationRuleV1::RuntimeAssertFailureTrap
+                })
+                .then_some(SemanticKirSyntheticOperationRuleV1::RuntimeAssertFailureTrap);
+            let parameter_count = correspondence.parameter_bindings[parameter_offset..]
+                .iter()
+                .take_while(|binding| {
+                    binding.correspondence_owner == correspondence_owner
+                        && binding.semantic_function == expected_function.semantic_function
+                })
+                .count();
+            let parameter_end = parameter_offset
+                .checked_add(parameter_count)
+                .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+            let parameter_component_count = correspondence.parameter_component_bindings
+                [parameter_component_offset..]
+                .iter()
+                .take_while(|binding| {
+                    binding.correspondence_owner == correspondence_owner
+                        && binding.semantic_function == expected_function.semantic_function
+                })
+                .count();
+            let parameter_component_end = parameter_component_offset
+                .checked_add(parameter_component_count)
+                .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+            let ignored_parameter_count = correspondence.ignored_parameter_bindings
+                [ignored_parameter_offset..]
+                .iter()
+                .take_while(|binding| {
+                    binding.correspondence_owner == correspondence_owner
+                        && binding.semantic_function == expected_function.semantic_function
+                })
+                .count();
+            let ignored_parameter_end = ignored_parameter_offset
+                .checked_add(ignored_parameter_count)
+                .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
+            if !validate_operation_correspondence_layout(
+                &expected_blocks,
+                &target_body.blocks,
+                correspondence
+                    .blocks
+                    .get(block_offset..block_end)
+                    .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?,
+                correspondence
+                    .statement_operation_spans
+                    .get(statement_offset..statement_end)
+                    .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?,
+                correspondence
+                    .terminator_operation_spans
+                    .get(terminator_offset..terminator_end)
+                    .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?,
+                &synthetic,
+                runtime_assert_rule,
+            ) {
+                return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+            }
+            validate_parameter_correspondence_with_wave64_v1(
+                owner,
+                expected_function,
+                target,
+                ArgumentTraceV1 {
+                    direct: correspondence
+                        .parameter_bindings
+                        .get(parameter_offset..parameter_end)
+                        .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?,
+                    components: correspondence
+                        .parameter_component_bindings
+                        .get(parameter_component_offset..parameter_component_end)
+                        .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?,
+                    ignored: correspondence
+                        .ignored_parameter_bindings
+                        .get(ignored_parameter_offset..ignored_parameter_end)
+                        .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?,
+                },
+                argument_budget,
+            )?;
+            let call_return_end = call_return_offset
+                + correspondence.call_returns[call_return_offset..]
+                    .iter()
+                    .take_while(|row| {
+                        row.correspondence_owner == correspondence_owner
+                            && row.semantic_function == expected_function.semantic_function
+                    })
+                    .count();
+            validate_call_correspondence_v1(
+                owner,
+                expected_function,
+                target,
+                &call_targets,
+                &correspondence.call_returns[call_return_offset..call_return_end],
+                &correspondence.call_result_components,
+                &correspondence.terminator_operation_spans[terminator_offset..terminator_end],
+                argument_budget,
+            )?;
+            call_return_offset = call_return_end;
+            block_offset = block_end;
+            statement_offset = statement_end;
+            terminator_offset = terminator_end;
+            parameter_offset = parameter_end;
+            parameter_component_offset = parameter_component_end;
+            ignored_parameter_offset = ignored_parameter_end;
+        }
+        if block_offset != correspondence.blocks.len()
+            || statement_offset != correspondence.statement_operation_spans.len()
+            || terminator_offset != correspondence.terminator_operation_spans.len()
+            || used_synthetic != correspondence.synthetic_operation_spans.len()
+            || parameter_offset != correspondence.parameter_bindings.len()
+            || parameter_component_offset != correspondence.parameter_component_bindings.len()
+            || ignored_parameter_offset != correspondence.ignored_parameter_bindings.len()
+            || call_return_offset != correspondence.call_returns.len()
         {
             return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
         }
-        let target_body = target
-            .body
-            .as_ref()
-            .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
-        let order = owner
-            .plan_for_function(expected_function.semantic_function)
-            .filter(|plan| plan.function_identity() == semantic_function.identity())
-            .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?
-            .plan()
-            .reverse_postorder()
-            .iter()
-            .map(|block| SemanticBlockIdV1::from_index(block.get()));
-        let expected_blocks = order
-            .map(|semantic_block| {
-                let source = semantic_function
-                    .blocks()
-                    .get(semantic_block.index() as usize)
-                    .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
-                Ok(ExpectedSemanticKirBlockCoverageV1 {
-                    correspondence_owner,
-                    semantic_function: expected_function.semantic_function,
-                    semantic_block,
-                    kernel_ir_block: BlockId(semantic_block.index()),
-                    source_statement_count: u32::try_from(source.statements().len())
-                        .map_err(|_| ProductionSemanticKirErrorV1::CorrespondenceMismatch)?,
-                })
-            })
-            .collect::<Result<Vec<_>, ProductionSemanticKirErrorV1>>()?;
-        let statement_count = expected_blocks
-            .iter()
-            .try_fold(0_usize, |count, block| {
-                count.checked_add(block.source_statement_count as usize)
-            })
-            .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
-        let block_end = block_offset
-            .checked_add(expected_blocks.len())
-            .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
-        let statement_end = statement_offset
-            .checked_add(statement_count)
-            .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
-        let terminator_end = terminator_offset
-            .checked_add(expected_blocks.len())
-            .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
-        let synthetic = correspondence
-            .synthetic_operation_spans
-            .iter()
-            .filter(|span| span.semantic_function == expected_function.semantic_function)
-            .filter(|span| span.correspondence_owner == correspondence_owner)
-            .cloned()
-            .collect::<Vec<_>>();
-        used_synthetic = used_synthetic
-            .checked_add(synthetic.len())
-            .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
-        let runtime_assert_rule = synthetic
-            .iter()
-            .any(|span| span.rule == SemanticKirSyntheticOperationRuleV1::RuntimeAssertFailureTrap)
-            .then_some(SemanticKirSyntheticOperationRuleV1::RuntimeAssertFailureTrap);
-        let parameter_count = correspondence.parameter_bindings[parameter_offset..]
-            .iter()
-            .take_while(|binding| {
-                binding.correspondence_owner == correspondence_owner
-                    && binding.semantic_function == expected_function.semantic_function
-            })
-            .count();
-        let parameter_end = parameter_offset
-            .checked_add(parameter_count)
-            .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
-        let parameter_component_count = correspondence.parameter_component_bindings
-            [parameter_component_offset..]
-            .iter()
-            .take_while(|binding| {
-                binding.correspondence_owner == correspondence_owner
-                    && binding.semantic_function == expected_function.semantic_function
-            })
-            .count();
-        let parameter_component_end = parameter_component_offset
-            .checked_add(parameter_component_count)
-            .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
-        let ignored_parameter_count = correspondence.ignored_parameter_bindings
-            [ignored_parameter_offset..]
-            .iter()
-            .take_while(|binding| {
-                binding.correspondence_owner == correspondence_owner
-                    && binding.semantic_function == expected_function.semantic_function
-            })
-            .count();
-        let ignored_parameter_end = ignored_parameter_offset
-            .checked_add(ignored_parameter_count)
-            .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?;
-        if !validate_operation_correspondence_layout(
-            &expected_blocks,
-            &target_body.blocks,
-            correspondence
-                .blocks
-                .get(block_offset..block_end)
-                .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?,
-            correspondence
-                .statement_operation_spans
-                .get(statement_offset..statement_end)
-                .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?,
-            correspondence
-                .terminator_operation_spans
-                .get(terminator_offset..terminator_end)
-                .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?,
-            &synthetic,
-            runtime_assert_rule,
-        ) {
-            return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
-        }
-        validate_parameter_correspondence_with_wave64_v1(
-            owner,
-            expected_function,
-            target,
-            ArgumentTraceV1 {
-                direct: correspondence
-                    .parameter_bindings
-                    .get(parameter_offset..parameter_end)
-                    .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?,
-                components: correspondence
-                    .parameter_component_bindings
-                    .get(parameter_component_offset..parameter_component_end)
-                    .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?,
-                ignored: correspondence
-                    .ignored_parameter_bindings
-                    .get(ignored_parameter_offset..ignored_parameter_end)
-                    .ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?,
-            },
-            argument_budget,
-        )?;
-        let call_return_end = call_return_offset
-            + correspondence.call_returns[call_return_offset..]
-                .iter()
-                .take_while(|row| {
-                    row.correspondence_owner == correspondence_owner
-                        && row.semantic_function == expected_function.semantic_function
-                })
-                .count();
-        validate_call_correspondence_v1(
-            owner,
-            expected_function,
-            target,
-            &call_targets,
-            &correspondence.call_returns[call_return_offset..call_return_end],
-            &correspondence.call_result_components,
-            &correspondence.terminator_operation_spans[terminator_offset..terminator_end],
-            argument_budget,
-        )?;
-        call_return_offset = call_return_end;
-        block_offset = block_end;
-        statement_offset = statement_end;
-        terminator_offset = terminator_end;
-        parameter_offset = parameter_end;
-        parameter_component_offset = parameter_component_end;
-        ignored_parameter_offset = ignored_parameter_end;
-    }
-    if block_offset != correspondence.blocks.len()
-        || statement_offset != correspondence.statement_operation_spans.len()
-        || terminator_offset != correspondence.terminator_operation_spans.len()
-        || used_synthetic != correspondence.synthetic_operation_spans.len()
-        || parameter_offset != correspondence.parameter_bindings.len()
-        || parameter_component_offset != correspondence.parameter_component_bindings.len()
-        || ignored_parameter_offset != correspondence.ignored_parameter_bindings.len()
-        || call_return_offset != correspondence.call_returns.len()
-    {
-        return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
-    }
-    Ok(())
+        Ok(())
     };
     if ordinary_source_has_raw_wave64_shuffle_v1(owner.source_semantic()) {
         with_canonical_call_scratch_v1(&mut argument_budget, |budget| {
@@ -11017,7 +11020,12 @@ struct HelperCallArgumentV1 {
 
 #[derive(Clone)]
 enum PlannedParameterLocalBindingV1 {
-    Wave64Nominal { local: usize, semantic_type: SemanticTypeIdV1, descriptor: Wave64NominalReferenceDescriptorV1, values: Vec<ValueDef> },
+    Wave64Nominal {
+        local: usize,
+        semantic_type: SemanticTypeIdV1,
+        descriptor: Wave64NominalReferenceDescriptorV1,
+        values: Vec<ValueDef>,
+    },
     Bf16Nominal {
         local: usize,
         semantic_type: SemanticTypeIdV1,
@@ -11398,7 +11406,7 @@ fn lower_one_semantic_function_for_composition_v1<'facts>(
         ordered_composition,
         bf16,
         wave64_source_owner,
-)
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -11538,7 +11546,7 @@ fn lower_one_semantic_function_with_composition_v1<'facts>(
             None => None,
         },
         wave64_source_owner,
-)?;
+    )?;
     lowering.ordered_composition = ordered_composition.is_some();
     lowering.execution_calls = match execution_calls {
         Some(consumer) => Some(&mut *consumer as &mut (dyn ExecutionDefinedCallConsumerV29 + '_)),
@@ -12007,18 +12015,24 @@ fn capture_and_lower_fresh_wave64_source_v1(
         limits.max_argument_correspondence_work,
     );
     let mut budget = ArgumentBudgetV1::new(&mut work, limits.max_argument_correspondence_storage);
-    let receipt = owner.try_capture_occurrences_with_budget_v1(&mut budget).map_err(|error| {
-        use fe2o3_pliron::ProductionSemanticSsaOccurrenceErrorV1 as Capture;
-        match error {
-            Capture::Replay(error) => ProductionSemanticKirErrorV1::SemanticSsa(error),
-            Capture::Resource(error) => ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(error),
-            Capture::CaptureMismatch { function, block } => unsupported(
-                function.index(), block.map(|block| block.get()), None,
-                "original Wave64 source occurrence capture did not join its SSA owner",
-            ),
-            Capture::AlreadyCaptured => ArgumentResourceV1::Accounting.into(),
-        }
-    })?;
+    let receipt = owner
+        .try_capture_occurrences_with_budget_v1(&mut budget)
+        .map_err(|error| {
+            use fe2o3_pliron::ProductionSemanticSsaOccurrenceErrorV1 as Capture;
+            match error {
+                Capture::Replay(error) => ProductionSemanticKirErrorV1::SemanticSsa(error),
+                Capture::Resource(error) => {
+                    ProductionSemanticKirErrorV1::ArgumentCorrespondenceResource(error)
+                }
+                Capture::CaptureMismatch { function, block } => unsupported(
+                    function.index(),
+                    block.map(|block| block.get()),
+                    None,
+                    "original Wave64 source occurrence capture did not join its SSA owner",
+                ),
+                Capture::AlreadyCaptured => ArgumentResourceV1::Accounting.into(),
+            }
+        })?;
     // Capture transfers its real installed payload at the old floor. Reserve
     // that exact receipt before any subsequent controlled lowering allocation.
     let input = receipt.retained_storage();
@@ -12028,9 +12042,12 @@ fn capture_and_lower_fresh_wave64_source_v1(
     // and denial history; lower_module's Result cleanup restores its own floor.
     budget.release_storage(input)?;
     let result = result?;
-    if budget.storage() != CallReturnBufferV1::bytes(
-        result.1.call_returns.len(), result.1.call_result_components.len(),
-    )? {
+    if budget.storage()
+        != CallReturnBufferV1::bytes(
+            result.1.call_returns.len(),
+            result.1.call_result_components.len(),
+        )?
+    {
         return Err(ArgumentResourceV1::Accounting.into());
     }
     Ok(result)
@@ -12981,9 +12998,24 @@ fn lower_single_root_module(
                 closure_budget,
                 call_budget,
             )?,
-            _ => match checked_wave64_helper_parameter_plan_v1(owner, selected_root, function_id, defined_function_ids[&function_id].clone(), limits.max_operations, closure_budget, call_budget)? {
+            _ => match checked_wave64_helper_parameter_plan_v1(
+                owner,
+                selected_root,
+                function_id,
+                defined_function_ids[&function_id].clone(),
+                limits.max_operations,
+                closure_budget,
+                call_budget,
+            )? {
                 Some(plan) => plan,
-                None => direct_scalar_helper_plan_v1(semantic, selected_root, function_id, defined_function_ids[&function_id].clone(), limits.max_operations, closure_budget)?,
+                None => direct_scalar_helper_plan_v1(
+                    semantic,
+                    selected_root,
+                    function_id,
+                    defined_function_ids[&function_id].clone(),
+                    limits.max_operations,
+                    closure_budget,
+                )?,
             },
         };
         plans.push(plan);
@@ -13023,7 +13055,12 @@ fn lower_single_root_module(
             (
                 plan.semantic_function,
                 LoweredFunctionSignatureV1 {
-                    wave64_nominal: plan.parameter_local_bindings.iter().any(|binding| matches!(binding, PlannedParameterLocalBindingV1::Wave64Nominal { .. })),
+                    wave64_nominal: plan.parameter_local_bindings.iter().any(|binding| {
+                        matches!(
+                            binding,
+                            PlannedParameterLocalBindingV1::Wave64Nominal { .. }
+                        )
+                    }),
                     bf16_nominal: plan.parameter_local_bindings.iter().any(|binding| {
                         matches!(binding, PlannedParameterLocalBindingV1::Bf16Nominal { .. })
                     }),
@@ -13156,7 +13193,7 @@ fn lower_single_root_module(
                         _ => None,
                     },
                     Some(owner),
-)?;
+                )?;
                 remaining_operations = remaining_operations
                     .checked_sub(lowered.emitted_operations)
                     .ok_or(ProductionSemanticKirErrorV1::ResourceLimit {
@@ -13565,7 +13602,7 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
             None,
             None,
             None,
-)
+        )
     }
 
     fn begin_block(
@@ -13670,11 +13707,36 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
             } else {
                 ExecutionCfgRepresentationV29::LegacyAbi
             };
-            let binding = if let SemanticPromotedTransportV1::CheckedWave64Reference(descriptor)=promoted.transport {
-                let mut selected=None;
-                self.wave64_references.with_descriptor_v1(descriptor,self.emission_work.as_deref_mut().ok_or(ArgumentResourceV1::Accounting)?,&mut |guard,_|{selected=Some(guard.reconstruct_v1(self.types,promoted.transport_semantic_type,&parameters)?);Ok(())})?;
+            let binding = if let SemanticPromotedTransportV1::CheckedWave64Reference(descriptor) =
+                promoted.transport
+            {
+                let mut selected = None;
+                self.wave64_references.with_descriptor_v1(
+                    descriptor,
+                    self.emission_work
+                        .as_deref_mut()
+                        .ok_or(ArgumentResourceV1::Accounting)?,
+                    &mut |guard, _| {
+                        selected = Some(guard.reconstruct_v1(
+                            self.types,
+                            promoted.transport_semantic_type,
+                            &parameters,
+                        )?);
+                        Ok(())
+                    },
+                )?;
                 selected.ok_or(ProductionSemanticKirErrorV1::CorrespondenceMismatch)?
-            }else{promoted.transport.binding_from_transport_with_representation_v29(self.types,promoted.transport_semantic_type,&parameters,&promoted.kernel_types,representation)?};
+            } else {
+                promoted
+                    .transport
+                    .binding_from_transport_with_representation_v29(
+                        self.types,
+                        promoted.transport_semantic_type,
+                        &parameters,
+                        &promoted.kernel_types,
+                        representation,
+                    )?
+            };
             if let SemanticValueBindingV1::DynamicLds {
                 base,
                 len,
@@ -13696,7 +13758,18 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
             {
                 self.emitted_unsigned_exclusive_bounds.insert(*value, 64);
             }
-            if self.wave64_references.rank_locals.contains(&local) || self.wave64_references.locals.contains_key(&local) { self.wave64_references.seed_arithmetic_bound_v1(local,&binding,self.emission_work.as_deref_mut().ok_or(ArgumentResourceV1::Accounting)?,&mut self.emitted_unsigned_exclusive_bounds)?; }
+            if self.wave64_references.rank_locals.contains(&local)
+                || self.wave64_references.locals.contains_key(&local)
+            {
+                self.wave64_references.seed_arithmetic_bound_v1(
+                    local,
+                    &binding,
+                    self.emission_work
+                        .as_deref_mut()
+                        .ok_or(ArgumentResourceV1::Accounting)?,
+                    &mut self.emitted_unsigned_exclusive_bounds,
+                )?;
+            }
             self.locals[local as usize] = Some(binding);
             let block_argument = SsaValueV1::BlockArgument {
                 block: SsaBlockIdV1::new(block.index()),
@@ -14445,13 +14518,37 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
                         )
                     })?;
                 let promoted = &self.control_flow_ssa.promoted[&local];
-                let values = if let SemanticPromotedTransportV1::CheckedWave64Reference(descriptor)=promoted.transport {
-                    let mut selected=Vec::new();
-                    self.wave64_references.with_descriptor_v1(descriptor,self.emission_work.as_deref_mut().ok_or(ArgumentResourceV1::Accounting)?,&mut |guard,budget|{
-                        budget.charge_work(promoted.kernel_types.len())?;
-                        guard.visit_values_v1(binding,&promoted.kernel_types,&mut LegacyTransportCollectorV1(&mut selected)).map_err(|detail|unsupported(0,Some(block.index()),None,detail))?;Ok(())
-                    })?;selected
-                }else{promoted.transport.transport_values(binding,&promoted.kernel_types).map_err(|detail|unsupported(0,Some(block.index()),None,detail))?};
+                let values =
+                    if let SemanticPromotedTransportV1::CheckedWave64Reference(descriptor) =
+                        promoted.transport
+                    {
+                        let mut selected = Vec::new();
+                        self.wave64_references.with_descriptor_v1(
+                            descriptor,
+                            self.emission_work
+                                .as_deref_mut()
+                                .ok_or(ArgumentResourceV1::Accounting)?,
+                            &mut |guard, budget| {
+                                budget.charge_work(promoted.kernel_types.len())?;
+                                guard
+                                    .visit_values_v1(
+                                        binding,
+                                        &promoted.kernel_types,
+                                        &mut LegacyTransportCollectorV1(&mut selected),
+                                    )
+                                    .map_err(|detail| {
+                                        unsupported(0, Some(block.index()), None, detail)
+                                    })?;
+                                Ok(())
+                            },
+                        )?;
+                        selected
+                    } else {
+                        promoted
+                            .transport
+                            .transport_values(binding, &promoted.kernel_types)
+                            .map_err(|detail| unsupported(0, Some(block.index()), None, detail))?
+                    };
                 (values, promoted.kernel_types.len())
             };
             if values.len() != expected_count {
@@ -15076,7 +15173,14 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
             ),
             SemanticRvalueKindV1::Borrow { place, .. }
             | SemanticRvalueKindV1::AddressOf { place, .. } => {
-                if let Some(binding) = self.try_lower_checked_wave64_snapshot_borrow_v1(block, statement, result_type, value)? { return Ok(binding); }
+                if let Some(binding) = self.try_lower_checked_wave64_snapshot_borrow_v1(
+                    block,
+                    statement,
+                    result_type,
+                    value,
+                )? {
+                    return Ok(binding);
+                }
                 if let Some(binding) = self.try_lower_source_address_v29(
                     block,
                     statement,
@@ -22271,7 +22375,19 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
             }
             let projection = &place.projections()[projection_index];
             if projection.kind() == SemanticProjectionKindV1::Dereference {
-                if matches!(binding,SemanticValueBindingV1::CollectiveContext) && self.wave64_references.locals.contains_key(&place.local().index()) && !self.checked_wave64_deref_v1(place.local().index(),current_type,projection)? { return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch); }
+                if matches!(binding, SemanticValueBindingV1::CollectiveContext)
+                    && self
+                        .wave64_references
+                        .locals
+                        .contains_key(&place.local().index())
+                    && !self.checked_wave64_deref_v1(
+                        place.local().index(),
+                        current_type,
+                        projection,
+                    )?
+                {
+                    return Err(ProductionSemanticKirErrorV1::CorrespondenceMismatch);
+                }
                 source_value = false;
             }
             binding = match (binding, projection.kind()) {
@@ -22370,11 +22486,15 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
                 {
                     binding
                 }
-                (binding @ SemanticValueBindingV1::WaveLane { .. }, SemanticProjectionKindV1::Field(_))
-                    if access == SourceReferenceAccessV29::Read => {
+                (
+                    binding @ SemanticValueBindingV1::WaveLane { .. },
+                    SemanticProjectionKindV1::Field(_),
+                ) if access == SourceReferenceAccessV29::Read => {
                     let carrier_type = place.projections()[..projection_index]
                         .last()
-                        .map_or(self.function.locals()[index].ty(), |previous| previous.result_type());
+                        .map_or(self.function.locals()[index].ty(), |previous| {
+                            previous.result_type()
+                        });
                     self.with_emission_budget_v1(|this, budget| {
                         wave_lane_arithmetic_field_v1(
                             this.types,
@@ -22383,14 +22503,28 @@ impl<'a, 'service> SemanticFunctionLoweringV1<'a, 'service> {
                             projection,
                             &binding,
                             budget,
-                        )?.ok_or_else(|| unsupported(
-                            this.semantic_function.index(), Some(block.index()), statement,
-                            "wave lane field is not its exact issued u32 arithmetic component",
-                        ))
+                        )?
+                        .ok_or_else(|| {
+                            unsupported(
+                                this.semantic_function.index(),
+                                Some(block.index()),
+                                statement,
+                                "wave lane field is not its exact issued u32 arithmetic component",
+                            )
+                        })
                     })?
                 }
-                (binding @ SemanticValueBindingV1::Aggregate(_), SemanticProjectionKindV1::Dereference)
-                    if self.checked_wave64_deref_v1(place.local().index(),current_type,projection)? => binding,
+                (
+                    binding @ SemanticValueBindingV1::Aggregate(_),
+                    SemanticProjectionKindV1::Dereference,
+                ) if self.checked_wave64_deref_v1(
+                    place.local().index(),
+                    current_type,
+                    projection,
+                )? =>
+                {
+                    binding
+                }
                 (
                     SemanticValueBindingV1::Aggregate(mut fields),
                     SemanticProjectionKindV1::Field(field),
@@ -26454,8 +26588,7 @@ mod resource_tests {
         )
         .unwrap();
         let callables = [callable];
-        let mut test_emission_work =
-            fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(1_000_000);
+        let mut test_emission_work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(1_000_000);
         let mut test_emission_budget =
             ArgumentBudgetV1::new(&mut test_emission_work, 16 * 1024 * 1024);
         let mut lowering = SemanticFunctionLoweringV1::new(
@@ -26939,8 +27072,7 @@ mod resource_tests {
             vec![block],
         )
         .unwrap();
-        let mut test_emission_work =
-            fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(1_000_000);
+        let mut test_emission_work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(1_000_000);
         let mut test_emission_budget =
             ArgumentBudgetV1::new(&mut test_emission_work, 16 * 1024 * 1024);
         let mut lowering = SemanticFunctionLoweringV1::new(
@@ -27566,8 +27698,7 @@ mod resource_tests {
         )
         .unwrap();
         let callables = [callable];
-        let mut test_emission_work =
-            fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(1_000_000);
+        let mut test_emission_work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(1_000_000);
         let mut test_emission_budget =
             ArgumentBudgetV1::new(&mut test_emission_work, 16 * 1024 * 1024);
         let mut lowering = SemanticFunctionLoweringV1::new(
@@ -28247,8 +28378,7 @@ mod resource_tests {
             vec![block],
         )
         .unwrap();
-        let mut test_emission_work =
-            fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(1_000_000);
+        let mut test_emission_work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(1_000_000);
         let mut test_emission_budget =
             ArgumentBudgetV1::new(&mut test_emission_work, 16 * 1024 * 1024);
         let mut lowering = SemanticFunctionLoweringV1::new(
@@ -28539,8 +28669,7 @@ mod resource_tests {
             blocks,
         )
         .unwrap();
-        let mut test_emission_work =
-            fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(1_000_000);
+        let mut test_emission_work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(1_000_000);
         let mut test_emission_budget =
             ArgumentBudgetV1::new(&mut test_emission_work, 16 * 1024 * 1024);
         let mut lowering = SemanticFunctionLoweringV1::new(
@@ -29891,8 +30020,7 @@ mod resource_tests {
             vec![block],
         )
         .unwrap();
-        let mut test_emission_work =
-            fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(1_000_000);
+        let mut test_emission_work = fe2o3_kernel_ir::CanonicalKernelIrWorkBudgetV1::new(1_000_000);
         let mut test_emission_budget =
             ArgumentBudgetV1::new(&mut test_emission_work, 16 * 1024 * 1024);
         let mut lowering = SemanticFunctionLoweringV1::new(

@@ -3666,7 +3666,6 @@ fn deepseek_oracles_reject_every_corrupted_output_word() {
     }
 }
 
-
 #[cfg(feature = "hardware-test-hooks")]
 const SPARSE_ATTENTION_SIMT: AdvancedCase = AdvancedCase {
     label: "gfx950 content sparse attention SIMT",
@@ -3674,14 +3673,12 @@ const SPARSE_ATTENTION_SIMT: AdvancedCase = AdvancedCase {
     ..SPARSE_ATTENTION
 };
 
-
 #[cfg(feature = "hardware-test-hooks")]
 const HYBRID_ATTENTION_SIMT: AdvancedCase = AdvancedCase {
     label: "gfx950 compressed hybrid attention SIMT",
     static_lds_bytes: 0,
     ..HYBRID_ATTENTION
 };
-
 
 #[cfg(feature = "hardware-test-hooks")]
 hardware_case!(

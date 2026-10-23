@@ -328,14 +328,21 @@ impl<'a> Context<'a> {
                         } else {
                             LoweringLocation::device_function(module, function)
                         };
-                        if let Diagnostic::Unsupported { block, operation_index, .. } = diagnostic {
+                        if let Diagnostic::Unsupported {
+                            block,
+                            operation_index,
+                            ..
+                        } = diagnostic
+                        {
                             location.block = *block;
                             location.operation = *operation_index;
                         }
                         return Err(LoweringErrors::one(
                             location,
                             LoweringDiagnosticCode::UnprovenBarrierConvergence,
-                            format!("Wave64 helper convergence analysis has an undischarged diagnostic: {diagnostic:?}"),
+                            format!(
+                                "Wave64 helper convergence analysis has an undischarged diagnostic: {diagnostic:?}"
+                            ),
                         ));
                     }
                 }
@@ -355,14 +362,28 @@ impl<'a> Context<'a> {
                             .is_uniform_for(SynchronizationScope::Subgroup)
                     {
                         let location = if position == 0 {
-                            LoweringLocation::operation(module, kernel, function, block.id, operation_index)
+                            LoweringLocation::operation(
+                                module,
+                                kernel,
+                                function,
+                                block.id,
+                                operation_index,
+                            )
                         } else {
-                            LoweringLocation::device_operation(module, function, block.id, operation_index)
+                            LoweringLocation::device_operation(
+                                module,
+                                function,
+                                block.id,
+                                operation_index,
+                            )
                         };
                         return Err(LoweringErrors::one(
                             location,
                             LoweringDiagnosticCode::UnprovenBarrierConvergence,
-                            format!("Wave64 operation or transitive helper call has varying control: {:?}", report.block_control(block.id)),
+                            format!(
+                                "Wave64 operation or transitive helper call has varying control: {:?}",
+                                report.block_control(block.id)
+                            ),
                         ));
                     }
                 }

@@ -586,7 +586,8 @@ fn physical_context(module: &Module) -> CompilerPhysicalLaunchV2<'_> {
         module,
         fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx950,
         &[(&module.kernels[0], [1, 1, 1])],
-    ).unwrap()
+    )
+    .unwrap()
 }
 
 fn physical_identity(module: &Module) -> ProductionSemanticAnchorKirIdentityV1 {
@@ -597,7 +598,9 @@ fn physical_identity(module: &Module) -> ProductionSemanticAnchorKirIdentityV1 {
 fn lower_physical(module: &Module) -> Result<String, LoweringErrors> {
     verify_module(module).expect("control must reach the actual physical/context route");
     lower_compiler_module_to_xnack_minus_llvm_ir_with_physical_launch_v2(
-        module, physical_identity(module), &physical_context(module),
+        module,
+        physical_identity(module),
+        &physical_context(module),
     )
 }
 
@@ -606,8 +609,12 @@ fn closed_wave64_helpers_compose_actual_physical_root_without_uniform_helper_for
     let module = module();
     let physical = physical_context(&module);
     let context = Context::check_with_physical_v1(
-        &module, LoweringTarget::Gfx950XnackMinusV1, Some(&physical),
-    ).unwrap().expect("same-owner physical and closed helper context");
+        &module,
+        LoweringTarget::Gfx950XnackMinusV1,
+        Some(&physical),
+    )
+    .unwrap()
+    .expect("same-owner physical and closed helper context");
     let root = physical.entry(&module.kernels[0]).unwrap().unwrap();
     assert!(context.matches_physical_input_v1(&module, &module.functions[0], Some(root)));
     assert!(!context.matches_physical_input_v1(&module, &module.functions[0], None));
@@ -616,24 +623,41 @@ fn closed_wave64_helpers_compose_actual_physical_root_without_uniform_helper_for
     // A separately reconstructed, equal-byte input is not the retained root.
     let detached = physical_context(&module);
     assert!(!context.matches_physical_input_v1(
-        &module, &module.functions[0], detached.entry(&module.kernels[0]).unwrap(),
+        &module,
+        &module.functions[0],
+        detached.entry(&module.kernels[0]).unwrap(),
     ));
     let report = context.report(&module, &module.functions[1]).unwrap();
-    assert_eq!(report.value(ValueId(0)), fe2o3_kernel_analysis::Variation::Varying);
-    assert_eq!(report.block_control(BlockId(1)), fe2o3_kernel_analysis::Variation::Varying);
-    assert!(report.block_control(BlockId(3)).is_uniform_for(SynchronizationScope::Subgroup));
+    assert_eq!(
+        report.value(ValueId(0)),
+        fe2o3_kernel_analysis::Variation::Varying
+    );
+    assert_eq!(
+        report.block_control(BlockId(1)),
+        fe2o3_kernel_analysis::Variation::Varying
+    );
+    assert!(
+        report
+            .block_control(BlockId(3))
+            .is_uniform_for(SynchronizationScope::Subgroup)
+    );
     let llvm = lower_compiler_module_to_xnack_minus_llvm_ir_with_physical_launch_v2(
-        &module, physical_identity(&module), &physical,
-    ).unwrap();
+        &module,
+        physical_identity(&module),
+        &physical,
+    )
+    .unwrap();
     assert!(llvm.contains("@llvm.amdgcn.ds.bpermute"));
     for name in ["wave_leaf", "wave_dispatch"] {
-        let definition = llvm.lines().find(|line| {
-            line.starts_with("define ") && line.contains(&format!("@{name}("))
-        }).expect("actual convergent helper definition");
+        let definition = llvm
+            .lines()
+            .find(|line| line.starts_with("define ") && line.contains(&format!("@{name}(")))
+            .expect("actual convergent helper definition");
         assert!(definition.contains("convergent"));
-        let calls: Vec<_> = llvm.lines().filter(|line| {
-            line.contains("call ") && line.contains(&format!("@{name}("))
-        }).collect();
+        let calls: Vec<_> = llvm
+            .lines()
+            .filter(|line| line.contains("call ") && line.contains(&format!("@{name}(")))
+            .collect();
         assert!(!calls.is_empty());
         assert!(calls.iter().all(|line| line.contains("convergent")));
     }
@@ -648,29 +672,45 @@ fn closed_wave64_helpers_compose_actual_physical_root_without_uniform_helper_for
 fn closed_wave64_helpers_physical_route_refuses_foreign_roster_and_exact_target_mismatch() {
     let module = module();
     let copy = module.clone();
-    assert!(CompilerPhysicalLaunchV2::new(
-        &module, fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx950,
-        &[(&copy.kernels[0], [1, 1, 1])],
-    ).is_err());
+    assert!(
+        CompilerPhysicalLaunchV2::new(
+            &module,
+            fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx950,
+            &[(&copy.kernels[0], [1, 1, 1])],
+        )
+        .is_err()
+    );
     let physical = physical_context(&module);
     let foreign = lower_compiler_module_to_xnack_minus_llvm_ir_with_physical_launch_v2(
-        &copy, physical_identity(&copy), &physical,
-    ).unwrap_err();
+        &copy,
+        physical_identity(&copy),
+        &physical,
+    )
+    .unwrap_err();
     assert!(foreign.contains(LoweringDiagnosticCode::InvalidLaunchPolicy));
     let wrong_target = CompilerPhysicalLaunchV2::new(
-        &module, fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx942,
+        &module,
+        fe2o3_amd_target::ProductionAmdTargetProfileV1::Gfx942,
         &[(&module.kernels[0], [1, 1, 1])],
-    ).unwrap();
+    )
+    .unwrap();
     let error = match Context::check_with_physical_v1(
-        &module, LoweringTarget::Gfx950XnackMinusV1, Some(&wrong_target),
+        &module,
+        LoweringTarget::Gfx950XnackMinusV1,
+        Some(&wrong_target),
     ) {
         Err(error) => error,
         Ok(_) => panic!("foreign physical target reached closed helper admission"),
     };
     assert!(error.contains(LoweringDiagnosticCode::InvalidLaunchPolicy));
-    assert!(lower_compiler_module_to_xnack_minus_llvm_ir_with_physical_launch_v2(
-        &module, physical_identity(&module), &wrong_target,
-    ).is_err());
+    assert!(
+        lower_compiler_module_to_xnack_minus_llvm_ir_with_physical_launch_v2(
+            &module,
+            physical_identity(&module),
+            &wrong_target,
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -682,7 +722,8 @@ fn closed_wave64_helpers_physical_route_keeps_divergent_partial_and_trap_refusal
     }
     let mut divergent = module();
     divergent.functions[1].body.as_mut().unwrap().blocks[1]
-        .operations.push(call(7, "wave_leaf", &[0, 1]));
+        .operations
+        .push(call(7, "wave_leaf", &[0, 1]));
     finish(&mut divergent);
     assert!(lower_physical(&divergent).is_err());
     let mut partial = module();
@@ -698,8 +739,10 @@ fn closed_wave64_helpers_physical_refusal_names_actual_helper_and_analysis_diagn
     let mut module = module();
     // Verified but non-returning helper CFG: the refusal must retain the actual
     // analysis diagnostic, not collapse it into a generic helper predicate.
-    module.functions[2].body.as_mut().unwrap().blocks[0].terminator =
-        Some(Terminator::Branch { target: BlockId(0), arguments: vec![] });
+    module.functions[2].body.as_mut().unwrap().blocks[0].terminator = Some(Terminator::Branch {
+        target: BlockId(0),
+        arguments: vec![],
+    });
     finish(&mut module);
     let error = lower_physical(&module).unwrap_err();
     assert!(error.contains(LoweringDiagnosticCode::UnprovenBarrierConvergence));
@@ -714,13 +757,23 @@ fn closed_wave64_helpers_physical_root_uses_actual_grid_bound() {
     let mut module = module();
     root_control(&mut module, true, false, false);
     let root = &mut module.functions[0].body.as_mut().unwrap().blocks[0];
-    root.operations.splice(2..2, [
-        value(5, Type::INDEX, OperationKind::Intrinsic(IntrinsicOperation::new(
-            IntrinsicKind::InvocationIndex { kind: IndexKind::Global, axis: Axis::X },
-            Type::INDEX,
-        ))),
-        value(6, Type::INDEX, OperationKind::Constant(Constant::Index(65))),
-    ]);
+    root.operations.splice(
+        2..2,
+        [
+            value(
+                5,
+                Type::INDEX,
+                OperationKind::Intrinsic(IntrinsicOperation::new(
+                    IntrinsicKind::InvocationIndex {
+                        kind: IndexKind::Global,
+                        axis: Axis::X,
+                    },
+                    Type::INDEX,
+                )),
+            ),
+            value(6, Type::INDEX, OperationKind::Constant(Constant::Index(65))),
+        ],
+    );
     root.operations.last_mut().unwrap().kind = OperationKind::Compare {
         predicate: ComparePredicate::GreaterThanOrEqual,
         lhs: ValueId(5),
