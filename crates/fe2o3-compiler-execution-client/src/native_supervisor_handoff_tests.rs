@@ -297,6 +297,103 @@ fn missing_credentials_expired_deadline_and_wrong_socket_shape_refuse() {
     }
 }
 
+fn wait_for_pipe_eof(
+    reader: &OwnedFd,
+    timeout: Duration,
+    mut pending: impl FnMut(),
+) -> std::io::Result<()> {
+    let deadline = Instant::now()
+        .checked_add(timeout)
+        .ok_or_else(|| std::io::Error::other("pipe EOF deadline overflow"))?;
+    loop {
+        if Instant::now() >= deadline {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "pipe EOF not observed",
+            ));
+        }
+        match rustix::io::read(reader, &mut [0]) {
+            Ok(0) => return Ok(()),
+            Ok(_) => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "data before pipe EOF",
+                ));
+            }
+            Err(error) => {
+                let error = std::io::Error::from(error);
+                if !matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+                ) {
+                    return Err(error);
+                }
+            }
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "pipe EOF not observed",
+            ));
+        }
+        // Concurrent fork tests can retain CLOEXEC writers until their child execs.
+        // Waiting alone is not proof of closure: only an actual zero-byte read is EOF.
+        pending();
+        std::thread::sleep(remaining.min(Duration::from_millis(1)));
+    }
+}
+
+#[test]
+fn pipe_eof_waits_for_a_delayed_duplicate() {
+    let (reader, writer) = rustix::pipe::pipe_with(
+        rustix::pipe::PipeFlags::CLOEXEC | rustix::pipe::PipeFlags::NONBLOCK,
+    )
+    .unwrap();
+    let mut duplicate = Some(rustix::io::fcntl_dupfd_cloexec(&writer, 0).unwrap());
+    drop(writer);
+    let mut observed_pending = false;
+    wait_for_pipe_eof(&reader, Duration::from_secs(2), || {
+        observed_pending = true;
+        drop(duplicate.take());
+    })
+    .unwrap();
+    assert!(observed_pending);
+    assert!(duplicate.is_none());
+}
+
+#[test]
+fn pipe_eof_refuses_a_retained_writer_at_the_deadline() {
+    let (reader, writer) = rustix::pipe::pipe_with(
+        rustix::pipe::PipeFlags::CLOEXEC | rustix::pipe::PipeFlags::NONBLOCK,
+    )
+    .unwrap();
+    assert_eq!(
+        wait_for_pipe_eof(&reader, Duration::from_millis(10), || {})
+            .unwrap_err()
+            .kind(),
+        std::io::ErrorKind::TimedOut,
+    );
+    drop(writer);
+    wait_for_pipe_eof(&reader, Duration::from_secs(2), || {}).unwrap();
+}
+
+#[test]
+fn pipe_eof_refuses_data_instead_of_accepting_readiness() {
+    let (reader, writer) = rustix::pipe::pipe_with(
+        rustix::pipe::PipeFlags::CLOEXEC | rustix::pipe::PipeFlags::NONBLOCK,
+    )
+    .unwrap();
+    assert_eq!(rustix::io::write(&writer, b"x").unwrap(), 1);
+    drop(writer);
+    assert_eq!(
+        wait_for_pipe_eof(&reader, Duration::from_secs(2), || {})
+            .unwrap_err()
+            .kind(),
+        std::io::ErrorKind::InvalidData,
+    );
+}
+
 #[test]
 fn unsolicited_rights_are_closed_even_in_the_eof_position() {
     use std::{io::IoSlice, mem::MaybeUninit};
@@ -327,7 +424,7 @@ fn unsolicited_rights_are_closed_even_in_the_eof_position() {
         drop(writer);
         drop(peer);
         assert!(pending.finish_with(&p, &mut b, &mut RealPeer).is_err());
-        assert_eq!(rustix::io::read(&reader, &mut [0]).unwrap(), 0);
+        wait_for_pipe_eof(&reader, Duration::from_secs(2), || {}).unwrap();
     }
 }
 
