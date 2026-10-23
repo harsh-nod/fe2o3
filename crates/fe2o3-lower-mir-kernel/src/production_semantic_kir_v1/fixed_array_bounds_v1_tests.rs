@@ -162,7 +162,8 @@ impl Fixture {
             SemanticEmissionPlacementV1::default(),
             None,
             None,
-        )
+            None,
+)
         .unwrap()
     }
 }

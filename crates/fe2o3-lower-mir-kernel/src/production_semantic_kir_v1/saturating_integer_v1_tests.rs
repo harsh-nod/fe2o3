@@ -19,6 +19,15 @@ mod saturating_integer_v1_tests {
         op: SemanticSaturatingIntegerOpV1,
         limit: usize,
     ) -> Result<Vec<Operation>, ProductionSemanticKirErrorV1> {
+        emit_with_source_bound(scalar, op, limit, None).map(|(operations, _)| operations)
+    }
+
+    fn emit_with_source_bound(
+        scalar: ScalarType,
+        op: SemanticSaturatingIntegerOpV1,
+        limit: usize,
+        source_bound: Option<u128>,
+    ) -> Result<(Vec<Operation>, Option<u128>), ProductionSemanticKirErrorV1> {
         let unit = SemanticTypeIdV1::from_index(0);
         let source = SemanticSourceProvenanceV1::unavailable();
         let abi = SemanticFunctionAbiV1::from_rustc(
@@ -79,15 +88,39 @@ mod saturating_integer_v1_tests {
             limit,
         )?;
         lowering.next_value = 2;
+        if let Some(bound) = source_bound {
+            lowering
+                .emitted_unsigned_exclusive_bounds
+                .insert(ValueId(0), bound);
+        }
         let mut operations = Vec::new();
-        lowering.emit_saturating_integer_v1(
+        let result = lowering.emit_saturating_integer_v1(
             &mut operations,
             Type::Scalar(scalar),
             op,
             ValueId(0),
             ValueId(1),
         )?;
-        Ok(operations)
+        let (value, _) = result.value().unwrap();
+        let result_bound = lowering
+            .emitted_unsigned_exclusive_bounds
+            .get(&value)
+            .copied();
+        Ok((operations, result_bound))
+    }
+
+    #[test]
+    fn wave64_lane_bound_attaches_only_to_final_unsigned_saturating_subtraction() {
+        let (_, bound) = emit_with_source_bound(ScalarType::U32, Subtract, 11, Some(64)).unwrap();
+        assert_eq!(bound, Some(64));
+        for (scalar, operation, source_bound) in [
+            (ScalarType::U32, Add, Some(64)),
+            (ScalarType::I32, Subtract, Some(64)),
+            (ScalarType::U32, Subtract, None),
+        ] {
+            let (_, bound) = emit_with_source_bound(scalar, operation, 11, source_bound).unwrap();
+            assert_eq!(bound, None);
+        }
     }
 
     fn signed(value: u128, bits: u16) -> i128 {

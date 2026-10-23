@@ -2941,6 +2941,20 @@ fn rejects_missing_mismatched_and_partial_wave_execution() {
         error.diagnostics()[0].message,
         "full-wave execution requires flat workgroup size 96 to be a multiple of 64"
     );
+
+    let mut subwave = wave_module(WaveWidth::Wave64);
+    subwave.kernels[0].workgroup_size = Some(WorkgroupSize::new(32, 1, 1));
+    // Every operation still claims a full Wave64; actual launch geometry wins.
+    verify_module(&subwave).expect("full-wave operations remain valid KIR");
+    let error = lower_kernel_to_llvm_ir(&subwave, &KernelId::new("wave_kernel")).unwrap_err();
+    assert_eq!(
+        error.diagnostics()[0].code,
+        LoweringDiagnosticCode::UnsupportedWaveOperation
+    );
+    assert_eq!(
+        error.diagnostics()[0].message,
+        "full-wave execution requires flat workgroup size 32 to be a multiple of 64"
+    );
 }
 
 #[test]
