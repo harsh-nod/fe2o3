@@ -55,7 +55,10 @@ fn source_contains_the_eight_expected_typed_kernels() {
             "gfx950_mhc_sinkhorn_mix".to_string(),
         ])
     );
-    assert_eq!(kernels.len(), 8);
+    assert_eq!(kernels.len(), 11);
+    for name in ["gfx950_kda_decode", "gfx950_kda_chunkwise_prefill", "gfx950_deepseek_sparse_attention"] {
+        assert_eq!(kernels.iter().filter(|f| f.sig.ident == name).count(), 2);
+    }
     for function in kernels {
         assert!(matches!(function.vis, Visibility::Public(_)));
         assert!(function.sig.unsafety.is_none());

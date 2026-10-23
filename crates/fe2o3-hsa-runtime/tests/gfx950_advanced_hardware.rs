@@ -3124,3 +3124,176 @@ fn output_poison_cannot_match_an_unwritten_expected_element() {
 #[test]
 #[ignore = "requires feature hardware-test-hooks and caller-supplied gfx950 HSACO"]
 fn gfx950_advanced_hardware_tests_require_explicit_hooks() {}
+
+#[cfg(feature = "hardware-test-hooks")]
+hardware_case!(
+    gfx950_kda_decode_simt_rust_cov6_matches_cpu_reference,
+    KDA_DECODE
+);
+#[cfg(feature = "hardware-test-hooks")]
+hardware_case!(
+    gfx950_kda_decode_tile_rust_cov6_matches_cpu_reference,
+    KDA_DECODE
+);
+#[cfg(feature = "hardware-test-hooks")]
+hardware_case!(
+    gfx950_kda_chunkwise_prefill_simt_rust_cov6_matches_cpu_reference,
+    KDA_PREFILL
+);
+#[cfg(feature = "hardware-test-hooks")]
+hardware_case!(
+    gfx950_kda_chunkwise_prefill_tile_rust_cov6_matches_cpu_reference,
+    KDA_PREFILL
+);
+#[cfg(feature = "hardware-test-hooks")]
+hardware_case!(
+    gfx950_deepseek_sparse_attention_simt_rust_cov6_matches_cpu_reference,
+    DEEPSEEK_SPARSE_ATTENTION
+);
+#[cfg(feature = "hardware-test-hooks")]
+hardware_case!(
+    gfx950_deepseek_sparse_attention_tile_rust_cov6_matches_cpu_reference,
+    DEEPSEEK_SPARSE_ATTENTION
+);
+
+#[cfg(feature = "hardware-test-hooks")]
+#[test]
+fn gfx950_kda_c_oracle_maps_all_value_major_state_and_eight_token_words() {
+    // Distinct exact f32 values identify every logical coordinate. These raw
+    // oracle layouts are shared by canonical SIMT and checked tile.
+    let state: Vec<f32> = (0..256)
+        .map(|i| f32::from_bits(0x3f000001 + i as u32))
+        .collect();
+    let tokens: Vec<f32> = (0..128)
+        .map(|i| f32::from_bits(0x3e800001 + i as u32))
+        .collect();
+    let physical = kda_state_value_major(&state);
+    for batch in 0..4 {
+        for value in 0..16 {
+            for key in 0..16 {
+                let parent_row = batch * 16 + value;
+                let tile_address = parent_row * 16 + key;
+                assert_eq!(tile_address, batch * 256 + value * 16 + key);
+                assert_eq!(
+                    physical[value * 16 + key].to_bits(),
+                    state[key * 16 + value].to_bits()
+                );
+                for chunk in 0..2 {
+                    let packed = kda_replicated_chunk_output(&tokens, chunk);
+                    assert_eq!(
+                        packed[value * 16 + key].to_bits(),
+                        tokens[(chunk * 4 + key / 4) * 16 + value].to_bits()
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[cfg(feature = "hardware-test-hooks")]
+#[test]
+fn gfx950_kda_oracle_checks_every_f32_state_and_token_output_word() {
+    // Canonical SIMT and checked tile use these same complete oracle plans.
+    for (case, output_count) in [(KDA_DECODE, 2), (KDA_PREFILL, 3)] {
+        let plans = plans_for(case).expect("complete KDA plans");
+        assert_eq!(plans.len(), 1);
+        let mut outputs = 0;
+        for buffer in &plans[0].buffers {
+            if buffer.immutable {
+                assert!(buffer.expected.is_none());
+                continue;
+            }
+            let Some(ExpectedOutput::F32 {
+                values, exact_mask, ..
+            }) = &buffer.expected
+            else {
+                panic!("every KDA output must retain its f32 oracle");
+            };
+            assert_eq!(
+                values.len(),
+                MULTIGRID_WORKGROUPS_V1 * KDA_STATE_ELEMENTS_V1
+            );
+            assert!(values.iter().all(|value| value.is_finite()));
+            assert!(exact_mask.is_none());
+            let bytes = value_bytes(values);
+            assert_eq!(bytes.len(), values.len() * 4);
+            let mut valid = buffer.initial.clone();
+            valid[buffer.body_offset..buffer.body_offset + bytes.len()].copy_from_slice(&bytes);
+            verify_buffer(buffer, &valid).expect("complete expected f32 bytes accepted");
+            assert!(
+                verify_buffer(buffer, &buffer.initial).is_err(),
+                "unwritten output must fail"
+            );
+            for word in 0..values.len() {
+                let offset = buffer.body_offset + word * 4;
+                let saved: [u8; 4] = valid[offset..offset + 4].try_into().unwrap();
+                valid[offset..offset + 4].copy_from_slice(&f32::NAN.to_le_bytes());
+                assert!(
+                    verify_buffer(buffer, &valid).is_err(),
+                    "unverified output word {word}"
+                );
+                valid[offset..offset + 4].copy_from_slice(&saved);
+            }
+            outputs += 1;
+        }
+        assert_eq!(outputs, output_count);
+    }
+}
+
+#[cfg(feature = "hardware-test-hooks")]
+#[test]
+fn deepseek_oracles_reject_every_corrupted_output_word() {
+    for case in [DEEPSEEK_SPARSE_ATTENTION] {
+        let plans = plans_for(case).expect("complete existing oracle plans");
+        assert_eq!(plans.len(), 1);
+        let mut output_sizes = Vec::new();
+        for buffer in &plans[0].buffers {
+            if buffer.immutable {
+                assert!(buffer.expected.is_none());
+                continue;
+            }
+            let expected = buffer
+                .expected
+                .as_ref()
+                .expect("every output has an oracle");
+            let (bytes, floating) = match expected {
+                ExpectedOutput::F32 {
+                    values, exact_mask, ..
+                } => {
+                    if let Some(mask) = exact_mask {
+                        assert_eq!(mask.len(), values.len());
+                        assert!(mask.iter().any(|&exact| exact));
+                        assert!(mask.iter().any(|&exact| !exact));
+                    }
+                    (value_bytes(values), true)
+                }
+                ExpectedOutput::U32(values) => (value_bytes(values), false),
+                ExpectedOutput::I32(_) => panic!("these kernels have no signed output"),
+            };
+            output_sizes.push(expected.element_count());
+            let mut valid = buffer.initial.clone();
+            valid[buffer.body_offset..buffer.body_offset + bytes.len()].copy_from_slice(&bytes);
+            verify_buffer(buffer, &valid).expect("full original expected output accepted");
+            assert!(verify_buffer(buffer, &buffer.initial).is_err());
+            for word in 0..expected.element_count() {
+                let offset = buffer.body_offset + word * 4;
+                let saved: [u8; 4] = valid[offset..offset + 4].try_into().unwrap();
+                let corrupt = if floating {
+                    f32::NAN.to_le_bytes()
+                } else {
+                    (u32::from_le_bytes(saved) ^ 1).to_le_bytes()
+                };
+                valid[offset..offset + 4].copy_from_slice(&corrupt);
+                assert!(
+                    verify_buffer(buffer, &valid).is_err(),
+                    "unverified {} word {word}",
+                    buffer.name
+                );
+                valid[offset..offset + 4].copy_from_slice(&saved);
+            }
+        }
+        output_sizes.sort_unstable();
+        assert_eq!(output_sizes, [1024, 1024, 1024]);
+    }
+}
+

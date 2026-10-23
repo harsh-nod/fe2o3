@@ -44,6 +44,11 @@ ADVANCED_MODE=${FE2O3_GFX950_ADVANCED_MODE:-canonical}
 MODE_FEATURE=
 if [[ $ADVANCED_MODE != canonical ]]; then
     case "$SUITE:$FEATURE:$ADVANCED_MODE" in
+        attention:kernel-kda-decode:simt|attention:kernel-kda-prefill:simt|\
+        attention:kernel-deepseek-sparse-attention:simt|attention:kernel-deepseek-sparse-attention-leader-exp-v1:simt) ;;
+        attention:kernel-kda-decode:tile|attention:kernel-kda-prefill:tile) MODE_FEATURE=$FEATURE-tile ;;
+        attention:kernel-deepseek-sparse-attention:tile|attention:kernel-deepseek-sparse-attention-leader-exp-v1:tile)
+            MODE_FEATURE=kernel-deepseek-sparse-attention-tile ;;
         attention:kernel-attnres-aggregate:simt|attention:kernel-attnres-aggregate:tile) MODE_FEATURE=$FEATURE-$ADVANCED_MODE ;;
         attention:kernel-four-branch-residual:simt|attention:kernel-four-branch-residual:tile) MODE_FEATURE=$FEATURE-$ADVANCED_MODE ;;
         attention:kernel-mhc-sinkhorn-mix:simt|attention:kernel-mhc-sinkhorn-mix:tile) MODE_FEATURE=$FEATURE-$ADVANCED_MODE ;;
@@ -147,6 +152,15 @@ case "$SUITE:$FEATURE" in
         exit 2 ;;
 esac
 
+# Explicit SIMT selects retained canonical Wave16 arithmetic.
+case "$SUITE:$FEATURE:$ADVANCED_MODE" in
+    attention:kernel-kda-decode:simt|attention:kernel-kda-decode:tile|\
+    attention:kernel-kda-prefill:simt|attention:kernel-kda-prefill:tile|\
+    attention:kernel-deepseek-sparse-attention:simt|attention:kernel-deepseek-sparse-attention:tile|\
+    attention:kernel-deepseek-sparse-attention-leader-exp-v1:simt|attention:kernel-deepseek-sparse-attention-leader-exp-v1:tile)
+        TEST=${TEST/_rust_cov6/_${ADVANCED_MODE}_rust_cov6} ;;
+esac
+
 if [[ $SUITE == attention ]]; then
     CRATE=fe2o3_gfx950_advanced_attention
 elif [[ $SUITE == systems ]]; then
@@ -161,6 +175,11 @@ ROOT_TARGET_DIR=${FE2O3_ROOT_TARGET_DIR:-$REPO_ROOT/target}
 OUTPUT_SUFFIX=$FEATURE
 if [[ -n $MODE_FEATURE ]]; then
     OUTPUT_SUFFIX=$FEATURE-$ADVANCED_MODE
+elif [[ $SUITE == attention && $ADVANCED_MODE == simt ]]; then
+    case "$FEATURE" in
+        kernel-kda-decode|kernel-kda-prefill|kernel-deepseek-sparse-attention|kernel-deepseek-sparse-attention-leader-exp-v1)
+            OUTPUT_SUFFIX=$FEATURE-simt ;;
+    esac
 fi
 if [[ $SUITE == systems && $SYSTEMS_ABLATION != canonical ]]; then
     OUTPUT_SUFFIX=$FEATURE-$SYSTEMS_ABLATION
