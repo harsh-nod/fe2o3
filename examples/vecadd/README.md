@@ -115,5 +115,12 @@ Historical private Vecadd testing covered both selections with 34 cases,
 32 dispatches and two empty cases. That observation does not qualify this
 public source revision. The current 17-case matrix checks 4,434 outputs,
 4,435 A elements, 4,436 B elements and canaries per selection: 8,868 logical
-outputs across both selections. Current public gfx950 execution and gfx942 qualification
-remain pending until their exact public source and full commands are checked.
+outputs across both selections.
+
+On 2026-10-23, public source
+[`5a03850`](https://github.com/harsh-nod/fe2o3/commit/5a03850ab2e10db0250412de03e0c269cce4c09b)
+passed both full gfx950 commands with a matching reused compiler,
+nightly-2026-04-03 and ROCm 7.2.1. This documentation-only descendant
+preserves those kernel and runtime inputs; it has no separate GPU replay.
+gfx942 GPU validation, protected execution authority and whole-site acceptance
+remain pending.
