@@ -3395,4 +3395,3 @@ fn gfx950_attention_simt_cases_preserve_independent_oracle_payloads() {
         }
     }
 }
-
