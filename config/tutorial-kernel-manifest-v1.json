@@ -4530,16 +4530,16 @@
             "kind": "kernel",
             "label": "Rust kernel",
             "language": "rust",
-            "displayedUtf8Bytes": 20810,
-            "displayedSha256": "fdc428f33edbcebe6ca7764c537db58e68009115d740fc21a8252253db8d4081",
+            "displayedUtf8Bytes": 21538,
+            "displayedSha256": "4fbd84c0a5d264256f6058acc838007033fea20b01f19ae03a46e80c36522c27",
             "sourcePath": "examples/gfx950_gpt_oss_decode/src/kernel.rs",
             "sourceCommit": "d670b3cfc3a04f39dcf37bd9e6b3d3bf1a9bbfba",
-            "sourceSha256": "fdc428f33edbcebe6ca7764c537db58e68009115d740fc21a8252253db8d4081",
+            "sourceSha256": "4fbd84c0a5d264256f6058acc838007033fea20b01f19ae03a46e80c36522c27",
             "sourceDigestScope": "displayed",
             "explanatory": false,
             "evidenceId": null,
             "sourceFragmentsSha256": [
-              "fdc428f33edbcebe6ca7764c537db58e68009115d740fc21a8252253db8d4081"
+              "4fbd84c0a5d264256f6058acc838007033fea20b01f19ae03a46e80c36522c27"
             ],
             "sourceItem": null,
             "sourceItemStatus": "pending"
@@ -4641,7 +4641,7 @@
             "sourceSha256": "5531e12d47e1d3c39c6b56a01335f97fd669fa4d0b8b709633a53cccab4d5a9d",
             "sourceDigestScope": "file",
             "explanatory": false,
-            "evidenceId": null,
+            "evidenceId": "gpt-scalar-attention-current-source-v1",
             "sourceFragmentsSha256": null,
             "sourceItem": null,
             "sourceItemStatus": "pending"
@@ -4670,11 +4670,11 @@
             "kind": "comparison",
             "label": "Archived c138 unfused HIP",
             "language": "cpp",
-            "displayedUtf8Bytes": 5461,
-            "displayedSha256": "902d38e7a6b974f95c6d3420a069ee6400b52b9eb7f24f4cfb9f5eeae147a09b",
+            "displayedUtf8Bytes": 5508,
+            "displayedSha256": "af497bc07612baab01054194c727a399fca037a9a8d2db70a337c7f606af9c92",
             "sourcePath": "examples/gfx950_gpt_oss_decode/gpt_oss_unfused.hip",
             "sourceCommit": "d670b3cfc3a04f39dcf37bd9e6b3d3bf1a9bbfba",
-            "sourceSha256": "902d38e7a6b974f95c6d3420a069ee6400b52b9eb7f24f4cfb9f5eeae147a09b",
+            "sourceSha256": "af497bc07612baab01054194c727a399fca037a9a8d2db70a337c7f606af9c92",
             "sourceDigestScope": null,
             "explanatory": true,
             "evidenceId": null,
@@ -17458,15 +17458,15 @@
       {
         "lessonId": "gfx950-gpt-oss-120b-megakernel",
         "tabOrdinal": 5,
-        "functionUtf8Offset": 1508,
+        "functionUtf8Offset": 1613,
         "kernelSymbol": "gfx950_gpt_oss_120b_decode_megakernel_v1",
         "classification": "kernel",
         "kernelIds": [
           "fixture:gfx950-gpt-oss-pipelined-attention:gfx950_gpt_oss_120b_decode_megakernel_v1"
         ],
         "negativeCases": [],
-        "bindingStatus": "pending",
-        "reason": "Owner: issue271-integration (https://github.com/harsh-nod/fe2o3/issues/271). The compiler example now declares 8192 bytes of LDS; the pinned website whole-file snapshot predates that repair. Refresh the actual website snapshot and exact source-occurrence binding before qualification; no rustc acceptance, execution, or variant qualification is asserted."
+        "bindingStatus": "fixture-source-contract",
+        "reason": "Expected fixture/source contract: exact current whole-file bytes and attributed occurrence under the retained Cargo feature selection; not rustc acceptance, execution, or variant qualification."
       },
       {
         "lessonId": "gfx950-gpt-oss-120b-megakernel",
