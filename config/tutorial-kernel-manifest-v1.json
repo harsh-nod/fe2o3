@@ -7159,28 +7159,35 @@
               "gfx950-moe-expert-rank",
               "gfx950-moe-expert-rank-expert-serial",
               "gfx950-moe-route",
-              "gfx950-stage-gradient-shard"
+              "gfx950-stage-gradient-shard",
+              "gfx950-moe-expert-rank-simt",
+              "gfx950-moe-route-tile",
+              "gfx950-combine-expert-ranks-tile",
+              "gfx950-stage-gradient-shard-tile"
             ]
           },
           {
             "lessonId": "gfx950-muon-optimizer",
             "fixtureIds": [
               "gfx950-muon-update",
-              "gfx950-muon-update-broadcast16"
+              "gfx950-muon-update-broadcast16",
+              "gfx950-muon-update-tile"
             ]
           },
           {
             "lessonId": "gfx950-ngram-embedding-gather",
             "fixtureIds": [
               "gfx950-qwen-ngram-gather",
-              "gfx950-qwen-ngram-gather-reverse-probe"
+              "gfx950-qwen-ngram-gather-reverse-probe",
+              "gfx950-qwen-ngram-gather-tile"
             ]
           },
           {
             "lessonId": "gfx950-speculative-mtp-verification",
             "fixtureIds": [
               "gfx950-speculative-transaction",
-              "gfx950-speculative-transaction-recompute-prefix"
+              "gfx950-speculative-transaction-recompute-prefix",
+              "gfx950-speculative-transaction-tile"
             ]
           }
         ]
@@ -8705,6 +8712,174 @@
             ]
           }
         ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-moe-expert-rank-simt",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-moe-expert-rank-simt"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "The exact mode source is bound; Bundle V7/KIR V12 oracle design, per-target simulation and fresh hardware qualification remain pending.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-advanced-moe",
+            "fixtureIds": [
+              "gfx950-moe-expert-rank-simt"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-moe-route-tile",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-moe-route-tile"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "The exact mode source is bound; Bundle V7/KIR V12 oracle design, per-target simulation and fresh hardware qualification remain pending.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-advanced-moe",
+            "fixtureIds": [
+              "gfx950-moe-route-tile"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-combine-expert-ranks-tile",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-combine-expert-ranks-tile"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "The exact mode source is bound; Bundle V7/KIR V12 oracle design, per-target simulation and fresh hardware qualification remain pending.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-advanced-moe",
+            "fixtureIds": [
+              "gfx950-combine-expert-ranks-tile"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-speculative-transaction-tile",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-speculative-transaction-tile"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "The exact mode source is bound; Bundle V7/KIR V12 oracle design, per-target simulation and fresh hardware qualification remain pending.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-speculative-mtp-verification",
+            "fixtureIds": [
+              "gfx950-speculative-transaction-tile"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-qwen-ngram-gather-tile",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-qwen-ngram-gather-tile"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "The exact mode source is bound; Bundle V7/KIR V12 oracle design, per-target simulation and fresh hardware qualification remain pending.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-ngram-embedding-gather",
+            "fixtureIds": [
+              "gfx950-qwen-ngram-gather-tile"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-stage-gradient-shard-tile",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-stage-gradient-shard-tile"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "The exact mode source is bound; Bundle V7/KIR V12 oracle design, per-target simulation and fresh hardware qualification remain pending.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-advanced-moe",
+            "fixtureIds": [
+              "gfx950-stage-gradient-shard-tile"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-muon-update-tile",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-muon-update-tile"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "The exact mode source is bound; Bundle V7/KIR V12 oracle design, per-target simulation and fresh hardware qualification remain pending.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-muon-optimizer",
+            "fixtureIds": [
+              "gfx950-muon-update-tile"
+            ]
+          }
+        ]
       }
     ],
     "status": "pending"
@@ -9317,11 +9492,11 @@
       },
       "compilerInput": {
         "packageManifest": "examples/gfx950_advanced_systems/Cargo.toml",
-        "packageManifestSha256": "0d4f6b3309f7d7cefbd57d6088a456e76890904865c1d383f06eaef7a89f6097",
+        "packageManifestSha256": "d34bca37098d4f521c8dda1756828ee4d0ec9069f08e8285a834c431efbb36c2",
         "sourcePaths": [
           "examples/gfx950_advanced_systems/src/kernel.rs"
         ],
-        "sourceClosureSha256": "513e4cd0ab4587da1b99361999d122decc67b76b435caf7dd8171fd0c6d64f36",
+        "sourceClosureSha256": "4f7c861346b7762ef5b50cadebe6adb423e978bdc3acb1054462fdedc75d2a4a",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_gfx950_advanced_systems",
@@ -9336,7 +9511,7 @@
         ],
         "cargoLockPath": "examples/gfx950_advanced_systems/Cargo.lock",
         "cargoLockSha256": "51023ed21622189b542412cc0b46f6131c028b8c52974aca0bdb95667b5820b4",
-        "contractSha256": "e4598b8c8617329173bffd6fef929142e4b282539f9bd185b0e69ec66b5e6afc"
+        "contractSha256": "1ce6a966d4ddad9a8df395d6465c290f0c9548d1912b50e0aca6ce00be4a9c6c"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-combine-expert-ranks.request.json",
@@ -10614,11 +10789,11 @@
       },
       "compilerInput": {
         "packageManifest": "examples/gfx950_advanced_systems/Cargo.toml",
-        "packageManifestSha256": "0d4f6b3309f7d7cefbd57d6088a456e76890904865c1d383f06eaef7a89f6097",
+        "packageManifestSha256": "d34bca37098d4f521c8dda1756828ee4d0ec9069f08e8285a834c431efbb36c2",
         "sourcePaths": [
           "examples/gfx950_advanced_systems/src/kernel.rs"
         ],
-        "sourceClosureSha256": "513e4cd0ab4587da1b99361999d122decc67b76b435caf7dd8171fd0c6d64f36",
+        "sourceClosureSha256": "4f7c861346b7762ef5b50cadebe6adb423e978bdc3acb1054462fdedc75d2a4a",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_gfx950_advanced_systems",
@@ -10633,7 +10808,7 @@
         ],
         "cargoLockPath": "examples/gfx950_advanced_systems/Cargo.lock",
         "cargoLockSha256": "51023ed21622189b542412cc0b46f6131c028b8c52974aca0bdb95667b5820b4",
-        "contractSha256": "c2f7ceca9489b9a19fb5e9dd9485d36567278dc4938c51d4864e671cbe2fcaf8"
+        "contractSha256": "2ffc38a4326ea8365f092ceb810097e278b30b5011745d9a752e8580ec78db02"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-moe-expert-rank-fp4-fp8.request.json",
@@ -10663,11 +10838,11 @@
       },
       "compilerInput": {
         "packageManifest": "examples/gfx950_advanced_systems/Cargo.toml",
-        "packageManifestSha256": "0d4f6b3309f7d7cefbd57d6088a456e76890904865c1d383f06eaef7a89f6097",
+        "packageManifestSha256": "d34bca37098d4f521c8dda1756828ee4d0ec9069f08e8285a834c431efbb36c2",
         "sourcePaths": [
           "examples/gfx950_advanced_systems/src/kernel.rs"
         ],
-        "sourceClosureSha256": "513e4cd0ab4587da1b99361999d122decc67b76b435caf7dd8171fd0c6d64f36",
+        "sourceClosureSha256": "4f7c861346b7762ef5b50cadebe6adb423e978bdc3acb1054462fdedc75d2a4a",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_gfx950_advanced_systems",
@@ -10683,7 +10858,7 @@
         ],
         "cargoLockPath": "examples/gfx950_advanced_systems/Cargo.lock",
         "cargoLockSha256": "51023ed21622189b542412cc0b46f6131c028b8c52974aca0bdb95667b5820b4",
-        "contractSha256": "2d98d0b6da111ca508ee316f7b3e959d2a1de00bbb1a20a85658240aba33aec6"
+        "contractSha256": "16fef5fad9770ed1f6d95d46c79fc2458f270345d91e9dc55280cdb7faba74f3"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-moe-expert-rank-fp4-fp8.request.json",
@@ -10711,11 +10886,11 @@
       },
       "compilerInput": {
         "packageManifest": "examples/gfx950_advanced_systems/Cargo.toml",
-        "packageManifestSha256": "0d4f6b3309f7d7cefbd57d6088a456e76890904865c1d383f06eaef7a89f6097",
+        "packageManifestSha256": "d34bca37098d4f521c8dda1756828ee4d0ec9069f08e8285a834c431efbb36c2",
         "sourcePaths": [
           "examples/gfx950_advanced_systems/src/kernel.rs"
         ],
-        "sourceClosureSha256": "513e4cd0ab4587da1b99361999d122decc67b76b435caf7dd8171fd0c6d64f36",
+        "sourceClosureSha256": "4f7c861346b7762ef5b50cadebe6adb423e978bdc3acb1054462fdedc75d2a4a",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_gfx950_advanced_systems",
@@ -10730,7 +10905,7 @@
         ],
         "cargoLockPath": "examples/gfx950_advanced_systems/Cargo.lock",
         "cargoLockSha256": "51023ed21622189b542412cc0b46f6131c028b8c52974aca0bdb95667b5820b4",
-        "contractSha256": "873c5e31d3385598e59b45b608db064df54cbbe5b2a8b082f6dde6a5337de5c8"
+        "contractSha256": "67873d645956e4dff9d16588a99dc7a8ccc3211a46652fdb6ac2d9810af459a0"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-moe-route-fp4-t16-e4-k2.request.json",
@@ -10758,11 +10933,11 @@
       },
       "compilerInput": {
         "packageManifest": "examples/gfx950_advanced_systems/Cargo.toml",
-        "packageManifestSha256": "0d4f6b3309f7d7cefbd57d6088a456e76890904865c1d383f06eaef7a89f6097",
+        "packageManifestSha256": "d34bca37098d4f521c8dda1756828ee4d0ec9069f08e8285a834c431efbb36c2",
         "sourcePaths": [
           "examples/gfx950_advanced_systems/src/kernel.rs"
         ],
-        "sourceClosureSha256": "513e4cd0ab4587da1b99361999d122decc67b76b435caf7dd8171fd0c6d64f36",
+        "sourceClosureSha256": "4f7c861346b7762ef5b50cadebe6adb423e978bdc3acb1054462fdedc75d2a4a",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_gfx950_advanced_systems",
@@ -10777,7 +10952,7 @@
         ],
         "cargoLockPath": "examples/gfx950_advanced_systems/Cargo.lock",
         "cargoLockSha256": "51023ed21622189b542412cc0b46f6131c028b8c52974aca0bdb95667b5820b4",
-        "contractSha256": "09513225559406f1e8e6f61a8eaa46e0e98652e1d0c02dc85c5e7623c44db3f5"
+        "contractSha256": "80b6a027a1eddab2d97aa4102c1875cdd619cb422a324b29b655df31cd45c291"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-muon-update-4x4.request.json",
@@ -10807,11 +10982,11 @@
       },
       "compilerInput": {
         "packageManifest": "examples/gfx950_advanced_systems/Cargo.toml",
-        "packageManifestSha256": "0d4f6b3309f7d7cefbd57d6088a456e76890904865c1d383f06eaef7a89f6097",
+        "packageManifestSha256": "d34bca37098d4f521c8dda1756828ee4d0ec9069f08e8285a834c431efbb36c2",
         "sourcePaths": [
           "examples/gfx950_advanced_systems/src/kernel.rs"
         ],
-        "sourceClosureSha256": "513e4cd0ab4587da1b99361999d122decc67b76b435caf7dd8171fd0c6d64f36",
+        "sourceClosureSha256": "4f7c861346b7762ef5b50cadebe6adb423e978bdc3acb1054462fdedc75d2a4a",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_gfx950_advanced_systems",
@@ -10827,7 +11002,7 @@
         ],
         "cargoLockPath": "examples/gfx950_advanced_systems/Cargo.lock",
         "cargoLockSha256": "51023ed21622189b542412cc0b46f6131c028b8c52974aca0bdb95667b5820b4",
-        "contractSha256": "1f68eeeedfd43b8a4ef3af9c219b686ad9f67e94c8a99c6da303f4e415789229"
+        "contractSha256": "d118ca9d4c46aab04c51eb48bc597fc97b6c0cd06b3b34f4f84070121b6f3101"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-muon-update-4x4.request.json",
@@ -10855,11 +11030,11 @@
       },
       "compilerInput": {
         "packageManifest": "examples/gfx950_advanced_systems/Cargo.toml",
-        "packageManifestSha256": "0d4f6b3309f7d7cefbd57d6088a456e76890904865c1d383f06eaef7a89f6097",
+        "packageManifestSha256": "d34bca37098d4f521c8dda1756828ee4d0ec9069f08e8285a834c431efbb36c2",
         "sourcePaths": [
           "examples/gfx950_advanced_systems/src/kernel.rs"
         ],
-        "sourceClosureSha256": "513e4cd0ab4587da1b99361999d122decc67b76b435caf7dd8171fd0c6d64f36",
+        "sourceClosureSha256": "4f7c861346b7762ef5b50cadebe6adb423e978bdc3acb1054462fdedc75d2a4a",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_gfx950_advanced_systems",
@@ -10874,7 +11049,7 @@
         ],
         "cargoLockPath": "examples/gfx950_advanced_systems/Cargo.lock",
         "cargoLockSha256": "51023ed21622189b542412cc0b46f6131c028b8c52974aca0bdb95667b5820b4",
-        "contractSha256": "5542b29c20f93371e6ebf3cb6db1a75f8e5c9db142cf59af56725fc0f9fe717f"
+        "contractSha256": "b29f1900590bf40d038725b12598831790ea49f6de43a6225b8a18b388459fa7"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-qwen-ngram-gather.request.json",
@@ -10904,11 +11079,11 @@
       },
       "compilerInput": {
         "packageManifest": "examples/gfx950_advanced_systems/Cargo.toml",
-        "packageManifestSha256": "0d4f6b3309f7d7cefbd57d6088a456e76890904865c1d383f06eaef7a89f6097",
+        "packageManifestSha256": "d34bca37098d4f521c8dda1756828ee4d0ec9069f08e8285a834c431efbb36c2",
         "sourcePaths": [
           "examples/gfx950_advanced_systems/src/kernel.rs"
         ],
-        "sourceClosureSha256": "513e4cd0ab4587da1b99361999d122decc67b76b435caf7dd8171fd0c6d64f36",
+        "sourceClosureSha256": "4f7c861346b7762ef5b50cadebe6adb423e978bdc3acb1054462fdedc75d2a4a",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_gfx950_advanced_systems",
@@ -10924,7 +11099,7 @@
         ],
         "cargoLockPath": "examples/gfx950_advanced_systems/Cargo.lock",
         "cargoLockSha256": "51023ed21622189b542412cc0b46f6131c028b8c52974aca0bdb95667b5820b4",
-        "contractSha256": "26c30467517885eb1e6ee4c121479447c492f790f90bba130bee8c4694d0c3c3"
+        "contractSha256": "520391e7a305509d452039cdf33277fc634f1e9b17201f6e7867d2da02a036ec"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-qwen-ngram-gather.request.json",
@@ -10952,11 +11127,11 @@
       },
       "compilerInput": {
         "packageManifest": "examples/gfx950_advanced_systems/Cargo.toml",
-        "packageManifestSha256": "0d4f6b3309f7d7cefbd57d6088a456e76890904865c1d383f06eaef7a89f6097",
+        "packageManifestSha256": "d34bca37098d4f521c8dda1756828ee4d0ec9069f08e8285a834c431efbb36c2",
         "sourcePaths": [
           "examples/gfx950_advanced_systems/src/kernel.rs"
         ],
-        "sourceClosureSha256": "513e4cd0ab4587da1b99361999d122decc67b76b435caf7dd8171fd0c6d64f36",
+        "sourceClosureSha256": "4f7c861346b7762ef5b50cadebe6adb423e978bdc3acb1054462fdedc75d2a4a",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_gfx950_advanced_systems",
@@ -10971,7 +11146,7 @@
         ],
         "cargoLockPath": "examples/gfx950_advanced_systems/Cargo.lock",
         "cargoLockSha256": "51023ed21622189b542412cc0b46f6131c028b8c52974aca0bdb95667b5820b4",
-        "contractSha256": "25b346e3f92b5e970c397e9c12d9acf57ef4496c3d0dda2744f71d6d9dac6fc9"
+        "contractSha256": "b578fd34b255dde47124e9575e45461ff3d4a28f8475d0f310b8f39c0b01f000"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-speculative-transaction.request.json",
@@ -11001,11 +11176,11 @@
       },
       "compilerInput": {
         "packageManifest": "examples/gfx950_advanced_systems/Cargo.toml",
-        "packageManifestSha256": "0d4f6b3309f7d7cefbd57d6088a456e76890904865c1d383f06eaef7a89f6097",
+        "packageManifestSha256": "d34bca37098d4f521c8dda1756828ee4d0ec9069f08e8285a834c431efbb36c2",
         "sourcePaths": [
           "examples/gfx950_advanced_systems/src/kernel.rs"
         ],
-        "sourceClosureSha256": "513e4cd0ab4587da1b99361999d122decc67b76b435caf7dd8171fd0c6d64f36",
+        "sourceClosureSha256": "4f7c861346b7762ef5b50cadebe6adb423e978bdc3acb1054462fdedc75d2a4a",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_gfx950_advanced_systems",
@@ -11021,7 +11196,7 @@
         ],
         "cargoLockPath": "examples/gfx950_advanced_systems/Cargo.lock",
         "cargoLockSha256": "51023ed21622189b542412cc0b46f6131c028b8c52974aca0bdb95667b5820b4",
-        "contractSha256": "a18a050ebea851b488365a872a18c43e9bf3d3861756c7d44ba8dc246d91bbf7"
+        "contractSha256": "9c4fac99f4934c97da68d67894ff52120ac6e96b919b0e0df72d65ba41c290ab"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-speculative-transaction.request.json",
@@ -11049,11 +11224,11 @@
       },
       "compilerInput": {
         "packageManifest": "examples/gfx950_advanced_systems/Cargo.toml",
-        "packageManifestSha256": "0d4f6b3309f7d7cefbd57d6088a456e76890904865c1d383f06eaef7a89f6097",
+        "packageManifestSha256": "d34bca37098d4f521c8dda1756828ee4d0ec9069f08e8285a834c431efbb36c2",
         "sourcePaths": [
           "examples/gfx950_advanced_systems/src/kernel.rs"
         ],
-        "sourceClosureSha256": "513e4cd0ab4587da1b99361999d122decc67b76b435caf7dd8171fd0c6d64f36",
+        "sourceClosureSha256": "4f7c861346b7762ef5b50cadebe6adb423e978bdc3acb1054462fdedc75d2a4a",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_gfx950_advanced_systems",
@@ -11068,7 +11243,7 @@
         ],
         "cargoLockPath": "examples/gfx950_advanced_systems/Cargo.lock",
         "cargoLockSha256": "51023ed21622189b542412cc0b46f6131c028b8c52974aca0bdb95667b5820b4",
-        "contractSha256": "c167c39948a510562fd173f9496dc4520a7e9e84f7c8fa688fe6f20dfaf5de97"
+        "contractSha256": "a6b31ea7a959639ce83dc571666d1c05216ac9204aa9877239c48696d2ed6372"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx950-stage-gradient-shard.request.json",
@@ -11080,6 +11255,356 @@
         "bundleVersion": 7,
         "canonicalKirVersion": 12,
         "status": "pending-reconciliation"
+      }
+    },
+    {
+      "fixtureId": "gfx950-moe-expert-rank-simt",
+      "testId": "kernel-compile-matrix/gfx950/moe-expert-rank-simt",
+      "testPath": "scripts/tests/kernel-compile-matrix.sh",
+      "target": "gfx950",
+      "matrix": {
+        "caseId": "moe-expert-rank-simt",
+        "runnerPath": "examples/gfx950_advanced_systems/run-moe-expert-rank-gfx950.sh",
+        "artifactName": "kernel-moe-expert-rank.hsaco",
+        "runnerArguments": [
+          "simt"
+        ],
+        "environment": []
+      },
+      "compilerInput": {
+        "packageManifest": "examples/gfx950_advanced_systems/Cargo.toml",
+        "packageManifestSha256": "d34bca37098d4f521c8dda1756828ee4d0ec9069f08e8285a834c431efbb36c2",
+        "sourcePaths": [
+          "examples/gfx950_advanced_systems/src/kernel_simt_moe_expert_rank.rs"
+        ],
+        "sourceClosureSha256": "4f7c861346b7762ef5b50cadebe6adb423e978bdc3acb1054462fdedc75d2a4a",
+        "cargoTarget": {
+          "kind": "lib",
+          "name": "fe2o3_gfx950_advanced_systems",
+          "sourcePath": "src/lib.rs"
+        },
+        "defaultFeatures": false,
+        "features": [
+          "kernel-moe-expert-rank",
+          "kernel-moe-expert-rank-simt"
+        ],
+        "kernelSymbols": [
+          "gfx950_moe_expert_rank_fp4_fp8_v1"
+        ],
+        "cargoLockPath": "examples/gfx950_advanced_systems/Cargo.lock",
+        "cargoLockSha256": "51023ed21622189b542412cc0b46f6131c028b8c52974aca0bdb95667b5820b4",
+        "contractSha256": "b2cf3682625ae289fa8f05bf4e0d0b1957da34f0794b0244afaa74de0fa631f2"
+      },
+      "simulation": {
+        "requestPath": "config/tutorial-simulation-v1/gfx950-moe-expert-rank-simt.request.json",
+        "requestSha256": null,
+        "requestBytes": null,
+        "expectationPath": "config/tutorial-simulation-v1/gfx950-moe-expert-rank-simt.expectation.json",
+        "expectationSha256": null,
+        "expectationBytes": null,
+        "bundleVersion": 7,
+        "canonicalKirVersion": 12,
+        "status": "pending-design"
+      }
+    },
+    {
+      "fixtureId": "gfx950-moe-route-tile",
+      "testId": "kernel-compile-matrix/gfx950/moe-route-tile",
+      "testPath": "scripts/tests/kernel-compile-matrix.sh",
+      "target": "gfx950",
+      "matrix": {
+        "caseId": "moe-route-tile",
+        "runnerPath": "examples/gfx950_advanced_systems/run-moe-route-gfx950.sh",
+        "artifactName": "kernel-moe-route.hsaco",
+        "runnerArguments": [
+          "tile"
+        ],
+        "environment": []
+      },
+      "compilerInput": {
+        "packageManifest": "examples/gfx950_advanced_systems/Cargo.toml",
+        "packageManifestSha256": "d34bca37098d4f521c8dda1756828ee4d0ec9069f08e8285a834c431efbb36c2",
+        "sourcePaths": [
+          "examples/gfx950_advanced_systems/src/kernel_tile_moe_route.rs"
+        ],
+        "sourceClosureSha256": "4f7c861346b7762ef5b50cadebe6adb423e978bdc3acb1054462fdedc75d2a4a",
+        "cargoTarget": {
+          "kind": "lib",
+          "name": "fe2o3_gfx950_advanced_systems",
+          "sourcePath": "src/lib.rs"
+        },
+        "defaultFeatures": false,
+        "features": [
+          "kernel-moe-route",
+          "kernel-moe-route-tile"
+        ],
+        "kernelSymbols": [
+          "gfx950_moe_route_fp4_t16_e4_k2_v1"
+        ],
+        "cargoLockPath": "examples/gfx950_advanced_systems/Cargo.lock",
+        "cargoLockSha256": "51023ed21622189b542412cc0b46f6131c028b8c52974aca0bdb95667b5820b4",
+        "contractSha256": "d97dbdc05da4ac0d5ecfe043d585ad8fe0a18120fdd788dabbad8e82761cc113"
+      },
+      "simulation": {
+        "requestPath": "config/tutorial-simulation-v1/gfx950-moe-route-tile.request.json",
+        "requestSha256": null,
+        "requestBytes": null,
+        "expectationPath": "config/tutorial-simulation-v1/gfx950-moe-route-tile.expectation.json",
+        "expectationSha256": null,
+        "expectationBytes": null,
+        "bundleVersion": 7,
+        "canonicalKirVersion": 12,
+        "status": "pending-design"
+      }
+    },
+    {
+      "fixtureId": "gfx950-combine-expert-ranks-tile",
+      "testId": "kernel-compile-matrix/gfx950/combine-expert-ranks-tile",
+      "testPath": "scripts/tests/kernel-compile-matrix.sh",
+      "target": "gfx950",
+      "matrix": {
+        "caseId": "combine-expert-ranks-tile",
+        "runnerPath": "examples/gfx950_advanced_systems/run-combine-expert-ranks-gfx950.sh",
+        "artifactName": "kernel-combine-expert-ranks.hsaco",
+        "runnerArguments": [
+          "tile"
+        ],
+        "environment": []
+      },
+      "compilerInput": {
+        "packageManifest": "examples/gfx950_advanced_systems/Cargo.toml",
+        "packageManifestSha256": "d34bca37098d4f521c8dda1756828ee4d0ec9069f08e8285a834c431efbb36c2",
+        "sourcePaths": [
+          "examples/gfx950_advanced_systems/src/kernel_tile_combine_expert_ranks.rs"
+        ],
+        "sourceClosureSha256": "4f7c861346b7762ef5b50cadebe6adb423e978bdc3acb1054462fdedc75d2a4a",
+        "cargoTarget": {
+          "kind": "lib",
+          "name": "fe2o3_gfx950_advanced_systems",
+          "sourcePath": "src/lib.rs"
+        },
+        "defaultFeatures": false,
+        "features": [
+          "kernel-combine-expert-ranks",
+          "kernel-combine-expert-ranks-tile"
+        ],
+        "kernelSymbols": [
+          "gfx950_combine_expert_ranks_v1"
+        ],
+        "cargoLockPath": "examples/gfx950_advanced_systems/Cargo.lock",
+        "cargoLockSha256": "51023ed21622189b542412cc0b46f6131c028b8c52974aca0bdb95667b5820b4",
+        "contractSha256": "ffb38fc074a364edd7dab238279f705b8269ab4ce25200978539615a8b8ae291"
+      },
+      "simulation": {
+        "requestPath": "config/tutorial-simulation-v1/gfx950-combine-expert-ranks-tile.request.json",
+        "requestSha256": null,
+        "requestBytes": null,
+        "expectationPath": "config/tutorial-simulation-v1/gfx950-combine-expert-ranks-tile.expectation.json",
+        "expectationSha256": null,
+        "expectationBytes": null,
+        "bundleVersion": 7,
+        "canonicalKirVersion": 12,
+        "status": "pending-design"
+      }
+    },
+    {
+      "fixtureId": "gfx950-speculative-transaction-tile",
+      "testId": "kernel-compile-matrix/gfx950/speculative-transaction-tile",
+      "testPath": "scripts/tests/kernel-compile-matrix.sh",
+      "target": "gfx950",
+      "matrix": {
+        "caseId": "speculative-transaction-tile",
+        "runnerPath": "examples/gfx950_advanced_systems/run-speculative-transaction-gfx950.sh",
+        "artifactName": "kernel-speculative-transaction.hsaco",
+        "runnerArguments": [
+          "tile"
+        ],
+        "environment": []
+      },
+      "compilerInput": {
+        "packageManifest": "examples/gfx950_advanced_systems/Cargo.toml",
+        "packageManifestSha256": "d34bca37098d4f521c8dda1756828ee4d0ec9069f08e8285a834c431efbb36c2",
+        "sourcePaths": [
+          "examples/gfx950_advanced_systems/src/kernel.rs"
+        ],
+        "sourceClosureSha256": "4f7c861346b7762ef5b50cadebe6adb423e978bdc3acb1054462fdedc75d2a4a",
+        "cargoTarget": {
+          "kind": "lib",
+          "name": "fe2o3_gfx950_advanced_systems",
+          "sourcePath": "src/lib.rs"
+        },
+        "defaultFeatures": false,
+        "features": [
+          "kernel-speculative-transaction",
+          "kernel-speculative-transaction-tile"
+        ],
+        "kernelSymbols": [
+          "gfx950_speculative_transaction_v1"
+        ],
+        "cargoLockPath": "examples/gfx950_advanced_systems/Cargo.lock",
+        "cargoLockSha256": "51023ed21622189b542412cc0b46f6131c028b8c52974aca0bdb95667b5820b4",
+        "contractSha256": "0b07764079ad2977575b19810700d6966994138461e343ed4d2eef02d493ab6b"
+      },
+      "simulation": {
+        "requestPath": "config/tutorial-simulation-v1/gfx950-speculative-transaction-tile.request.json",
+        "requestSha256": null,
+        "requestBytes": null,
+        "expectationPath": "config/tutorial-simulation-v1/gfx950-speculative-transaction-tile.expectation.json",
+        "expectationSha256": null,
+        "expectationBytes": null,
+        "bundleVersion": 7,
+        "canonicalKirVersion": 12,
+        "status": "pending-design"
+      }
+    },
+    {
+      "fixtureId": "gfx950-qwen-ngram-gather-tile",
+      "testId": "kernel-compile-matrix/gfx950/qwen-ngram-gather-tile",
+      "testPath": "scripts/tests/kernel-compile-matrix.sh",
+      "target": "gfx950",
+      "matrix": {
+        "caseId": "qwen-ngram-gather-tile",
+        "runnerPath": "examples/gfx950_advanced_systems/run-qwen-ngram-gather-gfx950.sh",
+        "artifactName": "kernel-qwen-ngram-gather.hsaco",
+        "runnerArguments": [
+          "tile"
+        ],
+        "environment": []
+      },
+      "compilerInput": {
+        "packageManifest": "examples/gfx950_advanced_systems/Cargo.toml",
+        "packageManifestSha256": "d34bca37098d4f521c8dda1756828ee4d0ec9069f08e8285a834c431efbb36c2",
+        "sourcePaths": [
+          "examples/gfx950_advanced_systems/src/kernel_tile_qwen_ngram_gather.rs"
+        ],
+        "sourceClosureSha256": "4f7c861346b7762ef5b50cadebe6adb423e978bdc3acb1054462fdedc75d2a4a",
+        "cargoTarget": {
+          "kind": "lib",
+          "name": "fe2o3_gfx950_advanced_systems",
+          "sourcePath": "src/lib.rs"
+        },
+        "defaultFeatures": false,
+        "features": [
+          "kernel-qwen-ngram-gather",
+          "kernel-qwen-ngram-gather-tile"
+        ],
+        "kernelSymbols": [
+          "gfx950_qwen_ngram_gather_v1"
+        ],
+        "cargoLockPath": "examples/gfx950_advanced_systems/Cargo.lock",
+        "cargoLockSha256": "51023ed21622189b542412cc0b46f6131c028b8c52974aca0bdb95667b5820b4",
+        "contractSha256": "0216c9e44c0f4cb42d6c85fe64b2c3e21b6f78f4e9f120e5659e3b8b21d46386"
+      },
+      "simulation": {
+        "requestPath": "config/tutorial-simulation-v1/gfx950-qwen-ngram-gather-tile.request.json",
+        "requestSha256": null,
+        "requestBytes": null,
+        "expectationPath": "config/tutorial-simulation-v1/gfx950-qwen-ngram-gather-tile.expectation.json",
+        "expectationSha256": null,
+        "expectationBytes": null,
+        "bundleVersion": 7,
+        "canonicalKirVersion": 12,
+        "status": "pending-design"
+      }
+    },
+    {
+      "fixtureId": "gfx950-stage-gradient-shard-tile",
+      "testId": "kernel-compile-matrix/gfx950/stage-gradient-shard-tile",
+      "testPath": "scripts/tests/kernel-compile-matrix.sh",
+      "target": "gfx950",
+      "matrix": {
+        "caseId": "stage-gradient-shard-tile",
+        "runnerPath": "examples/gfx950_advanced_systems/run-stage-gradient-shard-gfx950.sh",
+        "artifactName": "kernel-stage-gradient-shard.hsaco",
+        "runnerArguments": [
+          "tile"
+        ],
+        "environment": []
+      },
+      "compilerInput": {
+        "packageManifest": "examples/gfx950_advanced_systems/Cargo.toml",
+        "packageManifestSha256": "d34bca37098d4f521c8dda1756828ee4d0ec9069f08e8285a834c431efbb36c2",
+        "sourcePaths": [
+          "examples/gfx950_advanced_systems/src/kernel_tile_stage_gradient_shard.rs"
+        ],
+        "sourceClosureSha256": "4f7c861346b7762ef5b50cadebe6adb423e978bdc3acb1054462fdedc75d2a4a",
+        "cargoTarget": {
+          "kind": "lib",
+          "name": "fe2o3_gfx950_advanced_systems",
+          "sourcePath": "src/lib.rs"
+        },
+        "defaultFeatures": false,
+        "features": [
+          "kernel-stage-gradient-shard",
+          "kernel-stage-gradient-shard-tile"
+        ],
+        "kernelSymbols": [
+          "gfx950_stage_gradient_shard_v1"
+        ],
+        "cargoLockPath": "examples/gfx950_advanced_systems/Cargo.lock",
+        "cargoLockSha256": "51023ed21622189b542412cc0b46f6131c028b8c52974aca0bdb95667b5820b4",
+        "contractSha256": "9ce5c689046a1c2c00c1243b3c77a4778bc5dc286c5571da92f44922b97fd7ce"
+      },
+      "simulation": {
+        "requestPath": "config/tutorial-simulation-v1/gfx950-stage-gradient-shard-tile.request.json",
+        "requestSha256": null,
+        "requestBytes": null,
+        "expectationPath": "config/tutorial-simulation-v1/gfx950-stage-gradient-shard-tile.expectation.json",
+        "expectationSha256": null,
+        "expectationBytes": null,
+        "bundleVersion": 7,
+        "canonicalKirVersion": 12,
+        "status": "pending-design"
+      }
+    },
+    {
+      "fixtureId": "gfx950-muon-update-tile",
+      "testId": "kernel-compile-matrix/gfx950/muon-update-tile",
+      "testPath": "scripts/tests/kernel-compile-matrix.sh",
+      "target": "gfx950",
+      "matrix": {
+        "caseId": "muon-update-tile",
+        "runnerPath": "examples/gfx950_advanced_systems/run-muon-update-gfx950.sh",
+        "artifactName": "kernel-muon-update.hsaco",
+        "runnerArguments": [
+          "tile"
+        ],
+        "environment": []
+      },
+      "compilerInput": {
+        "packageManifest": "examples/gfx950_advanced_systems/Cargo.toml",
+        "packageManifestSha256": "d34bca37098d4f521c8dda1756828ee4d0ec9069f08e8285a834c431efbb36c2",
+        "sourcePaths": [
+          "examples/gfx950_advanced_systems/src/kernel_tile_muon_update.rs"
+        ],
+        "sourceClosureSha256": "4f7c861346b7762ef5b50cadebe6adb423e978bdc3acb1054462fdedc75d2a4a",
+        "cargoTarget": {
+          "kind": "lib",
+          "name": "fe2o3_gfx950_advanced_systems",
+          "sourcePath": "src/lib.rs"
+        },
+        "defaultFeatures": false,
+        "features": [
+          "kernel-muon-update",
+          "kernel-muon-update-tile"
+        ],
+        "kernelSymbols": [
+          "gfx950_muon_update_4x4_v1"
+        ],
+        "cargoLockPath": "examples/gfx950_advanced_systems/Cargo.lock",
+        "cargoLockSha256": "51023ed21622189b542412cc0b46f6131c028b8c52974aca0bdb95667b5820b4",
+        "contractSha256": "7a9f419c43d14f8dbe72195a97befe386c47ac4fdc7df46b4393edefe6fa4ac7"
+      },
+      "simulation": {
+        "requestPath": "config/tutorial-simulation-v1/gfx950-muon-update-tile.request.json",
+        "requestSha256": null,
+        "requestBytes": null,
+        "expectationPath": "config/tutorial-simulation-v1/gfx950-muon-update-tile.expectation.json",
+        "expectationSha256": null,
+        "expectationBytes": null,
+        "bundleVersion": 7,
+        "canonicalKirVersion": 12,
+        "status": "pending-design"
       }
     }
   ],
@@ -11181,14 +11706,22 @@
       "classification": "compiler-produced",
       "packageManifest": "examples/gfx950_advanced_systems/Cargo.toml",
       "sourcePaths": [
-        "examples/gfx950_advanced_systems/src/kernel.rs"
+        "examples/gfx950_advanced_systems/src/kernel.rs",
+        "examples/gfx950_advanced_systems/src/kernel_simt_moe_expert_rank.rs",
+        "examples/gfx950_advanced_systems/src/kernel_tile_moe_route.rs",
+        "examples/gfx950_advanced_systems/src/kernel_tile_combine_expert_ranks.rs",
+        "examples/gfx950_advanced_systems/src/kernel_tile_stage_gradient_shard.rs"
       ],
       "compilerFixtureIds": [
         "gfx950-combine-expert-ranks",
         "gfx950-moe-expert-rank",
         "gfx950-moe-expert-rank-expert-serial",
         "gfx950-moe-route",
-        "gfx950-stage-gradient-shard"
+        "gfx950-stage-gradient-shard",
+        "gfx950-moe-expert-rank-simt",
+        "gfx950-moe-route-tile",
+        "gfx950-combine-expert-ranks-tile",
+        "gfx950-stage-gradient-shard-tile"
       ],
       "requiredGates": [
         "production-compile",
@@ -11392,11 +11925,13 @@
       "classification": "compiler-produced",
       "packageManifest": "examples/gfx950_advanced_systems/Cargo.toml",
       "sourcePaths": [
-        "examples/gfx950_advanced_systems/src/kernel.rs"
+        "examples/gfx950_advanced_systems/src/kernel.rs",
+        "examples/gfx950_advanced_systems/src/kernel_tile_muon_update.rs"
       ],
       "compilerFixtureIds": [
         "gfx950-muon-update",
-        "gfx950-muon-update-broadcast16"
+        "gfx950-muon-update-broadcast16",
+        "gfx950-muon-update-tile"
       ],
       "requiredGates": [
         "production-compile",
@@ -11410,11 +11945,13 @@
       "classification": "compiler-produced",
       "packageManifest": "examples/gfx950_advanced_systems/Cargo.toml",
       "sourcePaths": [
-        "examples/gfx950_advanced_systems/src/kernel.rs"
+        "examples/gfx950_advanced_systems/src/kernel.rs",
+        "examples/gfx950_advanced_systems/src/kernel_tile_qwen_ngram_gather.rs"
       ],
       "compilerFixtureIds": [
         "gfx950-qwen-ngram-gather",
-        "gfx950-qwen-ngram-gather-reverse-probe"
+        "gfx950-qwen-ngram-gather-reverse-probe",
+        "gfx950-qwen-ngram-gather-tile"
       ],
       "requiredGates": [
         "production-compile",
@@ -11432,7 +11969,8 @@
       ],
       "compilerFixtureIds": [
         "gfx950-speculative-transaction",
-        "gfx950-speculative-transaction-recompute-prefix"
+        "gfx950-speculative-transaction-recompute-prefix",
+        "gfx950-speculative-transaction-tile"
       ],
       "requiredGates": [
         "production-compile",
@@ -12073,22 +12611,44 @@
         "variants": [
           {
             "kind": "simt",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-combine-expert-ranks:gfx950_combine_expert_ranks_v1",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-combine-expert-ranks",
+                "kernelSymbol": "gfx950_combine_expert_ranks_v1"
+              },
+              "selectionSha256": "a77dc321c32a2c0f3eba09be2cc02d3151c0d196abc1331b062107c3bfe7abd4",
+              "sourcePath": "examples/gfx950_advanced_systems/src/kernel.rs",
+              "sourceSha256": "45b9a7e5198bf274f6814438a230ec22405fde713b39f080bb4045c303f671ab",
+              "functionUtf8Offset": 28347
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "Exact existing simt Rust source selection is bound. Per-target compiler verification, simulation, full-output hardware qualification and performance evidence remain separate pending obligations."
             }
           },
           {
             "kind": "tile",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-combine-expert-ranks-tile:gfx950_combine_expert_ranks_v1",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-combine-expert-ranks-tile",
+                "kernelSymbol": "gfx950_combine_expert_ranks_v1"
+              },
+              "selectionSha256": "dd6b883ea89388de6a9117a1b01b6196487474a95221504a60f5b06922fd69ee",
+              "sourcePath": "examples/gfx950_advanced_systems/src/kernel_tile_combine_expert_ranks.rs",
+              "sourceSha256": "5ac3026c84b0d9b735419f7e6a1c5a47b6ce43eeac2a6ffdcac46c60cd7dcd80",
+              "functionUtf8Offset": 550
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "Exact existing tile Rust source selection is bound. Per-target compiler verification, simulation, full-output hardware qualification and performance evidence remain separate pending obligations."
             }
           }
         ]
@@ -13048,22 +13608,44 @@
         "variants": [
           {
             "kind": "simt",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-moe-expert-rank-simt:gfx950_moe_expert_rank_fp4_fp8_v1",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-moe-expert-rank-simt",
+                "kernelSymbol": "gfx950_moe_expert_rank_fp4_fp8_v1"
+              },
+              "selectionSha256": "9b11cd99a423602afdc97a64e4beae1366b2fb49cc0cf2a426090b9547dbb9e1",
+              "sourcePath": "examples/gfx950_advanced_systems/src/kernel_simt_moe_expert_rank.rs",
+              "sourceSha256": "c7fbf5489d246206ae9db5d07e5dd12fe1b7b86a0e25f515ff88aa7bd0a13638",
+              "functionUtf8Offset": 615
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "Exact existing simt Rust source selection is bound. Per-target compiler verification, simulation, full-output hardware qualification and performance evidence remain separate pending obligations."
             }
           },
           {
             "kind": "tile",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-moe-expert-rank:gfx950_moe_expert_rank_fp4_fp8_v1",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-moe-expert-rank",
+                "kernelSymbol": "gfx950_moe_expert_rank_fp4_fp8_v1"
+              },
+              "selectionSha256": "d9f758543b67ddab1d2c8c112de9e4dcc0d742adb3363491e2d06a70ce7b0326",
+              "sourcePath": "examples/gfx950_advanced_systems/src/kernel.rs",
+              "sourceSha256": "45b9a7e5198bf274f6814438a230ec22405fde713b39f080bb4045c303f671ab",
+              "functionUtf8Offset": 14796
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "Exact existing tile Rust source selection is bound. Per-target compiler verification, simulation, full-output hardware qualification and performance evidence remain separate pending obligations."
             }
           }
         ]
@@ -13080,22 +13662,44 @@
         "variants": [
           {
             "kind": "simt",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-moe-route:gfx950_moe_route_fp4_t16_e4_k2_v1",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-moe-route",
+                "kernelSymbol": "gfx950_moe_route_fp4_t16_e4_k2_v1"
+              },
+              "selectionSha256": "db9916b891c8e3c990cb3b41ade7ef42672002332284555b0f19ca589eac80e2",
+              "sourcePath": "examples/gfx950_advanced_systems/src/kernel.rs",
+              "sourceSha256": "45b9a7e5198bf274f6814438a230ec22405fde713b39f080bb4045c303f671ab",
+              "functionUtf8Offset": 1586
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "Exact existing simt Rust source selection is bound. Per-target compiler verification, simulation, full-output hardware qualification and performance evidence remain separate pending obligations."
             }
           },
           {
             "kind": "tile",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-moe-route-tile:gfx950_moe_route_fp4_t16_e4_k2_v1",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-moe-route-tile",
+                "kernelSymbol": "gfx950_moe_route_fp4_t16_e4_k2_v1"
+              },
+              "selectionSha256": "8e84f13081194a25bf344bc550f866fc4845a7d54cfecfe83bcb25370ff346d7",
+              "sourcePath": "examples/gfx950_advanced_systems/src/kernel_tile_moe_route.rs",
+              "sourceSha256": "522a5ded52c41d8ef6ba1865e9c0e58937a9e3a77ad7b7ec874c5761e35e397b",
+              "functionUtf8Offset": 832
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "Exact existing tile Rust source selection is bound. Per-target compiler verification, simulation, full-output hardware qualification and performance evidence remain separate pending obligations."
             }
           }
         ]
@@ -13144,22 +13748,44 @@
         "variants": [
           {
             "kind": "simt",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-muon-update:gfx950_muon_update_4x4_v1",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-muon-update",
+                "kernelSymbol": "gfx950_muon_update_4x4_v1"
+              },
+              "selectionSha256": "adecca2038e5bfdab0b8cc6092aaaa56b8ee97411d6d9ab0a233f9ce60e1fea8",
+              "sourcePath": "examples/gfx950_advanced_systems/src/kernel.rs",
+              "sourceSha256": "45b9a7e5198bf274f6814438a230ec22405fde713b39f080bb4045c303f671ab",
+              "functionUtf8Offset": 46810
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "Exact existing simt Rust source selection is bound. Per-target compiler verification, simulation, full-output hardware qualification and performance evidence remain separate pending obligations."
             }
           },
           {
             "kind": "tile",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-muon-update-tile:gfx950_muon_update_4x4_v1",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-muon-update-tile",
+                "kernelSymbol": "gfx950_muon_update_4x4_v1"
+              },
+              "selectionSha256": "3a6891284a5324551e2f91e4bdd2f4d639b8f2d8749117449122932e7ec1cf1b",
+              "sourcePath": "examples/gfx950_advanced_systems/src/kernel_tile_muon_update.rs",
+              "sourceSha256": "7f3a073671708daa00ceaf24ee5414b9428a17fdba0a32c41b7e28d06481408a",
+              "functionUtf8Offset": 764
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "Exact existing tile Rust source selection is bound. Per-target compiler verification, simulation, full-output hardware qualification and performance evidence remain separate pending obligations."
             }
           }
         ]
@@ -13208,22 +13834,44 @@
         "variants": [
           {
             "kind": "simt",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-qwen-ngram-gather:gfx950_qwen_ngram_gather_v1",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-qwen-ngram-gather",
+                "kernelSymbol": "gfx950_qwen_ngram_gather_v1"
+              },
+              "selectionSha256": "60eb9ab54cff640f9e776f5daf69d0506c141d7eb012c9b1fa1d2c4b86aa8907",
+              "sourcePath": "examples/gfx950_advanced_systems/src/kernel.rs",
+              "sourceSha256": "45b9a7e5198bf274f6814438a230ec22405fde713b39f080bb4045c303f671ab",
+              "functionUtf8Offset": 38579
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "Exact existing simt Rust source selection is bound. Per-target compiler verification, simulation, full-output hardware qualification and performance evidence remain separate pending obligations."
             }
           },
           {
             "kind": "tile",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-qwen-ngram-gather-tile:gfx950_qwen_ngram_gather_v1",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-qwen-ngram-gather-tile",
+                "kernelSymbol": "gfx950_qwen_ngram_gather_v1"
+              },
+              "selectionSha256": "caa5a24dc7fef3fc605651713ce00fa880fe9bfd64138cc65b7fa3f84f0014a7",
+              "sourcePath": "examples/gfx950_advanced_systems/src/kernel_tile_qwen_ngram_gather.rs",
+              "sourceSha256": "57f31ec1cd0dc5b5aea00b7e163b77c3536c636f69726a9508fa5b8301ff4186",
+              "functionUtf8Offset": 710
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "Exact existing tile Rust source selection is bound. Per-target compiler verification, simulation, full-output hardware qualification and performance evidence remain separate pending obligations."
             }
           }
         ]
@@ -13272,22 +13920,44 @@
         "variants": [
           {
             "kind": "simt",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-speculative-transaction:gfx950_speculative_transaction_v1",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-speculative-transaction",
+                "kernelSymbol": "gfx950_speculative_transaction_v1"
+              },
+              "selectionSha256": "afdcd284dc669bad6079097ff90c0a462aedfbecdc58fde3cfb7e9e9b1f80f05",
+              "sourcePath": "examples/gfx950_advanced_systems/src/kernel.rs",
+              "sourceSha256": "45b9a7e5198bf274f6814438a230ec22405fde713b39f080bb4045c303f671ab",
+              "functionUtf8Offset": 30537
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "Exact existing simt Rust source selection is bound. Per-target compiler verification, simulation, full-output hardware qualification and performance evidence remain separate pending obligations."
             }
           },
           {
             "kind": "tile",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-speculative-transaction-tile:gfx950_speculative_transaction_v1",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-speculative-transaction-tile",
+                "kernelSymbol": "gfx950_speculative_transaction_v1"
+              },
+              "selectionSha256": "ba853c85bcb2771f0e3693f2ffdb354834e0547f19811ae8415433ca62d09928",
+              "sourcePath": "examples/gfx950_advanced_systems/src/kernel.rs",
+              "sourceSha256": "45b9a7e5198bf274f6814438a230ec22405fde713b39f080bb4045c303f671ab",
+              "functionUtf8Offset": 53246
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "Exact existing tile Rust source selection is bound. Per-target compiler verification, simulation, full-output hardware qualification and performance evidence remain separate pending obligations."
             }
           }
         ]
@@ -13304,22 +13974,44 @@
         "variants": [
           {
             "kind": "simt",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-stage-gradient-shard:gfx950_stage_gradient_shard_v1",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-stage-gradient-shard",
+                "kernelSymbol": "gfx950_stage_gradient_shard_v1"
+              },
+              "selectionSha256": "29310b45019b42048b459a6eaae4f3340fb4a650fd6089a7c52e3eb7c4ff829e",
+              "sourcePath": "examples/gfx950_advanced_systems/src/kernel.rs",
+              "sourceSha256": "45b9a7e5198bf274f6814438a230ec22405fde713b39f080bb4045c303f671ab",
+              "functionUtf8Offset": 43942
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact simt source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "Exact existing simt Rust source selection is bound. Per-target compiler verification, simulation, full-output hardware qualification and performance evidence remain separate pending obligations."
             }
           },
           {
             "kind": "tile",
-            "status": "pending",
-            "source": null,
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-stage-gradient-shard-tile:gfx950_stage_gradient_shard_v1",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-stage-gradient-shard-tile",
+                "kernelSymbol": "gfx950_stage_gradient_shard_v1"
+              },
+              "selectionSha256": "b9efd41eb022bb68c62d868aa47b58ac40e81340cfa1abf1febfb9e0fbdaaed7",
+              "sourcePath": "examples/gfx950_advanced_systems/src/kernel_tile_stage_gradient_shard.rs",
+              "sourceSha256": "1cae8ae98c7ea6e4ff27f285f8df0aceffae2f14c863c7da0957e4f34a0eb613",
+              "functionUtf8Offset": 748
+            },
             "blocker": {
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Exact tile source variant and required per-target compile, simulation, and hardware evidence remain pending."
+              "reason": "Exact existing tile Rust source selection is bound. Per-target compiler verification, simulation, full-output hardware qualification and performance evidence remain separate pending obligations."
             }
           }
         ]
@@ -13769,6 +14461,384 @@
               "owner": "issue275-integration",
               "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
               "reason": "A genuine mixed source implementation and per-target source, simulator, native artifact, generated-host and direct-KFD qualification remain pending on gfx942/mi300x and gfx950/mi350."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-moe-expert-rank-simt:gfx950_moe_expert_rank_fp4_fp8_v1",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-moe-expert-rank-simt",
+            "kernelSymbol": "gfx950_moe_expert_rank_fp4_fp8_v1"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-moe-expert-rank-simt:gfx950_moe_expert_rank_fp4_fp8_v1",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-moe-expert-rank-simt",
+                "kernelSymbol": "gfx950_moe_expert_rank_fp4_fp8_v1"
+              },
+              "selectionSha256": "9b11cd99a423602afdc97a64e4beae1366b2fb49cc0cf2a426090b9547dbb9e1",
+              "sourcePath": "examples/gfx950_advanced_systems/src/kernel_simt_moe_expert_rank.rs",
+              "sourceSha256": "c7fbf5489d246206ae9db5d07e5dd12fe1b7b86a0e25f515ff88aa7bd0a13638",
+              "functionUtf8Offset": 615
+            },
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact existing simt Rust source selection is bound. Per-target compiler verification, simulation, full-output hardware qualification and performance evidence remain separate pending obligations."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-moe-expert-rank:gfx950_moe_expert_rank_fp4_fp8_v1",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-moe-expert-rank",
+                "kernelSymbol": "gfx950_moe_expert_rank_fp4_fp8_v1"
+              },
+              "selectionSha256": "d9f758543b67ddab1d2c8c112de9e4dcc0d742adb3363491e2d06a70ce7b0326",
+              "sourcePath": "examples/gfx950_advanced_systems/src/kernel.rs",
+              "sourceSha256": "45b9a7e5198bf274f6814438a230ec22405fde713b39f080bb4045c303f671ab",
+              "functionUtf8Offset": 14796
+            },
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact existing tile Rust source selection is bound. Per-target compiler verification, simulation, full-output hardware qualification and performance evidence remain separate pending obligations."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-moe-route-tile:gfx950_moe_route_fp4_t16_e4_k2_v1",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-moe-route-tile",
+            "kernelSymbol": "gfx950_moe_route_fp4_t16_e4_k2_v1"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-moe-route:gfx950_moe_route_fp4_t16_e4_k2_v1",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-moe-route",
+                "kernelSymbol": "gfx950_moe_route_fp4_t16_e4_k2_v1"
+              },
+              "selectionSha256": "db9916b891c8e3c990cb3b41ade7ef42672002332284555b0f19ca589eac80e2",
+              "sourcePath": "examples/gfx950_advanced_systems/src/kernel.rs",
+              "sourceSha256": "45b9a7e5198bf274f6814438a230ec22405fde713b39f080bb4045c303f671ab",
+              "functionUtf8Offset": 1586
+            },
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact existing simt Rust source selection is bound. Per-target compiler verification, simulation, full-output hardware qualification and performance evidence remain separate pending obligations."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-moe-route-tile:gfx950_moe_route_fp4_t16_e4_k2_v1",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-moe-route-tile",
+                "kernelSymbol": "gfx950_moe_route_fp4_t16_e4_k2_v1"
+              },
+              "selectionSha256": "8e84f13081194a25bf344bc550f866fc4845a7d54cfecfe83bcb25370ff346d7",
+              "sourcePath": "examples/gfx950_advanced_systems/src/kernel_tile_moe_route.rs",
+              "sourceSha256": "522a5ded52c41d8ef6ba1865e9c0e58937a9e3a77ad7b7ec874c5761e35e397b",
+              "functionUtf8Offset": 832
+            },
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact existing tile Rust source selection is bound. Per-target compiler verification, simulation, full-output hardware qualification and performance evidence remain separate pending obligations."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-combine-expert-ranks-tile:gfx950_combine_expert_ranks_v1",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-combine-expert-ranks-tile",
+            "kernelSymbol": "gfx950_combine_expert_ranks_v1"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-combine-expert-ranks:gfx950_combine_expert_ranks_v1",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-combine-expert-ranks",
+                "kernelSymbol": "gfx950_combine_expert_ranks_v1"
+              },
+              "selectionSha256": "a77dc321c32a2c0f3eba09be2cc02d3151c0d196abc1331b062107c3bfe7abd4",
+              "sourcePath": "examples/gfx950_advanced_systems/src/kernel.rs",
+              "sourceSha256": "45b9a7e5198bf274f6814438a230ec22405fde713b39f080bb4045c303f671ab",
+              "functionUtf8Offset": 28347
+            },
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact existing simt Rust source selection is bound. Per-target compiler verification, simulation, full-output hardware qualification and performance evidence remain separate pending obligations."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-combine-expert-ranks-tile:gfx950_combine_expert_ranks_v1",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-combine-expert-ranks-tile",
+                "kernelSymbol": "gfx950_combine_expert_ranks_v1"
+              },
+              "selectionSha256": "dd6b883ea89388de6a9117a1b01b6196487474a95221504a60f5b06922fd69ee",
+              "sourcePath": "examples/gfx950_advanced_systems/src/kernel_tile_combine_expert_ranks.rs",
+              "sourceSha256": "5ac3026c84b0d9b735419f7e6a1c5a47b6ce43eeac2a6ffdcac46c60cd7dcd80",
+              "functionUtf8Offset": 550
+            },
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact existing tile Rust source selection is bound. Per-target compiler verification, simulation, full-output hardware qualification and performance evidence remain separate pending obligations."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-speculative-transaction-tile:gfx950_speculative_transaction_v1",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-speculative-transaction-tile",
+            "kernelSymbol": "gfx950_speculative_transaction_v1"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-speculative-transaction:gfx950_speculative_transaction_v1",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-speculative-transaction",
+                "kernelSymbol": "gfx950_speculative_transaction_v1"
+              },
+              "selectionSha256": "afdcd284dc669bad6079097ff90c0a462aedfbecdc58fde3cfb7e9e9b1f80f05",
+              "sourcePath": "examples/gfx950_advanced_systems/src/kernel.rs",
+              "sourceSha256": "45b9a7e5198bf274f6814438a230ec22405fde713b39f080bb4045c303f671ab",
+              "functionUtf8Offset": 30537
+            },
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact existing simt Rust source selection is bound. Per-target compiler verification, simulation, full-output hardware qualification and performance evidence remain separate pending obligations."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-speculative-transaction-tile:gfx950_speculative_transaction_v1",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-speculative-transaction-tile",
+                "kernelSymbol": "gfx950_speculative_transaction_v1"
+              },
+              "selectionSha256": "ba853c85bcb2771f0e3693f2ffdb354834e0547f19811ae8415433ca62d09928",
+              "sourcePath": "examples/gfx950_advanced_systems/src/kernel.rs",
+              "sourceSha256": "45b9a7e5198bf274f6814438a230ec22405fde713b39f080bb4045c303f671ab",
+              "functionUtf8Offset": 53246
+            },
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact existing tile Rust source selection is bound. Per-target compiler verification, simulation, full-output hardware qualification and performance evidence remain separate pending obligations."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-qwen-ngram-gather-tile:gfx950_qwen_ngram_gather_v1",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-qwen-ngram-gather-tile",
+            "kernelSymbol": "gfx950_qwen_ngram_gather_v1"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-qwen-ngram-gather:gfx950_qwen_ngram_gather_v1",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-qwen-ngram-gather",
+                "kernelSymbol": "gfx950_qwen_ngram_gather_v1"
+              },
+              "selectionSha256": "60eb9ab54cff640f9e776f5daf69d0506c141d7eb012c9b1fa1d2c4b86aa8907",
+              "sourcePath": "examples/gfx950_advanced_systems/src/kernel.rs",
+              "sourceSha256": "45b9a7e5198bf274f6814438a230ec22405fde713b39f080bb4045c303f671ab",
+              "functionUtf8Offset": 38579
+            },
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact existing simt Rust source selection is bound. Per-target compiler verification, simulation, full-output hardware qualification and performance evidence remain separate pending obligations."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-qwen-ngram-gather-tile:gfx950_qwen_ngram_gather_v1",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-qwen-ngram-gather-tile",
+                "kernelSymbol": "gfx950_qwen_ngram_gather_v1"
+              },
+              "selectionSha256": "caa5a24dc7fef3fc605651713ce00fa880fe9bfd64138cc65b7fa3f84f0014a7",
+              "sourcePath": "examples/gfx950_advanced_systems/src/kernel_tile_qwen_ngram_gather.rs",
+              "sourceSha256": "57f31ec1cd0dc5b5aea00b7e163b77c3536c636f69726a9508fa5b8301ff4186",
+              "functionUtf8Offset": 710
+            },
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact existing tile Rust source selection is bound. Per-target compiler verification, simulation, full-output hardware qualification and performance evidence remain separate pending obligations."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-stage-gradient-shard-tile:gfx950_stage_gradient_shard_v1",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-stage-gradient-shard-tile",
+            "kernelSymbol": "gfx950_stage_gradient_shard_v1"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-stage-gradient-shard:gfx950_stage_gradient_shard_v1",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-stage-gradient-shard",
+                "kernelSymbol": "gfx950_stage_gradient_shard_v1"
+              },
+              "selectionSha256": "29310b45019b42048b459a6eaae4f3340fb4a650fd6089a7c52e3eb7c4ff829e",
+              "sourcePath": "examples/gfx950_advanced_systems/src/kernel.rs",
+              "sourceSha256": "45b9a7e5198bf274f6814438a230ec22405fde713b39f080bb4045c303f671ab",
+              "functionUtf8Offset": 43942
+            },
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact existing simt Rust source selection is bound. Per-target compiler verification, simulation, full-output hardware qualification and performance evidence remain separate pending obligations."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-stage-gradient-shard-tile:gfx950_stage_gradient_shard_v1",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-stage-gradient-shard-tile",
+                "kernelSymbol": "gfx950_stage_gradient_shard_v1"
+              },
+              "selectionSha256": "b9efd41eb022bb68c62d868aa47b58ac40e81340cfa1abf1febfb9e0fbdaaed7",
+              "sourcePath": "examples/gfx950_advanced_systems/src/kernel_tile_stage_gradient_shard.rs",
+              "sourceSha256": "1cae8ae98c7ea6e4ff27f285f8df0aceffae2f14c863c7da0957e4f34a0eb613",
+              "functionUtf8Offset": 748
+            },
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact existing tile Rust source selection is bound. Per-target compiler verification, simulation, full-output hardware qualification and performance evidence remain separate pending obligations."
+            }
+          }
+        ]
+      },
+      {
+        "kernelId": "fixture:gfx950-muon-update-tile:gfx950_muon_update_4x4_v1",
+        "selections": [
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-muon-update-tile",
+            "kernelSymbol": "gfx950_muon_update_4x4_v1"
+          }
+        ],
+        "variants": [
+          {
+            "kind": "simt",
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-muon-update:gfx950_muon_update_4x4_v1",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-muon-update",
+                "kernelSymbol": "gfx950_muon_update_4x4_v1"
+              },
+              "selectionSha256": "adecca2038e5bfdab0b8cc6092aaaa56b8ee97411d6d9ab0a233f9ce60e1fea8",
+              "sourcePath": "examples/gfx950_advanced_systems/src/kernel.rs",
+              "sourceSha256": "45b9a7e5198bf274f6814438a230ec22405fde713b39f080bb4045c303f671ab",
+              "functionUtf8Offset": 46810
+            },
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact existing simt Rust source selection is bound. Per-target compiler verification, simulation, full-output hardware qualification and performance evidence remain separate pending obligations."
+            }
+          },
+          {
+            "kind": "tile",
+            "status": "source-bound",
+            "source": {
+              "implementationKernelId": "fixture:gfx950-muon-update-tile:gfx950_muon_update_4x4_v1",
+              "selection": {
+                "kind": "fixture",
+                "fixtureId": "gfx950-muon-update-tile",
+                "kernelSymbol": "gfx950_muon_update_4x4_v1"
+              },
+              "selectionSha256": "3a6891284a5324551e2f91e4bdd2f4d639b8f2d8749117449122932e7ec1cf1b",
+              "sourcePath": "examples/gfx950_advanced_systems/src/kernel_tile_muon_update.rs",
+              "sourceSha256": "7f3a073671708daa00ceaf24ee5414b9428a17fdba0a32c41b7e28d06481408a",
+              "functionUtf8Offset": 764
+            },
+            "blocker": {
+              "owner": "issue275-integration",
+              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
+              "reason": "Exact existing tile Rust source selection is bound. Per-target compiler verification, simulation, full-output hardware qualification and performance evidence remain separate pending obligations."
             }
           }
         ]
