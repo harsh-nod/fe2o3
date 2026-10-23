@@ -408,11 +408,11 @@ case "$key" in
     symbol=gfx950_kda_chunkwise_prefill; kind=kda ;;
   kernel-content-sparse-attention | kernel-content-sparse-attention-reciprocal-reuse-v1)
     symbol=gfx950_content_sparse_attention; kind=fp8_attention
-    if [[ $attention_simt -eq 1 ]]; then kind=kda; fi ;;
+    if [[ $attention_simt -eq 1 ]]; then kind=scalar_attention; fi ;;
   kernel-deepseek-sparse-attention | kernel-deepseek-sparse-attention,kernel-deepseek-sparse-attention-tile) symbol=gfx950_deepseek_sparse_attention ;;
   kernel-compressed-hybrid-attention | kernel-compressed-hybrid-attention-division-baseline-v1)
     symbol=gfx950_compressed_hybrid_attention; kind=fp8_attention
-    if [[ $attention_simt -eq 1 ]]; then kind=kda; fi ;;
+    if [[ $attention_simt -eq 1 ]]; then kind=scalar_attention; fi ;;
   kernel-attnres-aggregate | kernel-attnres-aggregate-explicit-reuse-v1 | kernel-attnres-aggregate,kernel-attnres-aggregate-simt | kernel-attnres-aggregate,kernel-attnres-aggregate-tile)
     symbol=gfx950_attnres_aggregate ;;
   kernel-four-branch-residual | kernel-four-branch-residual-explicit-v1 | kernel-four-branch-residual,kernel-four-branch-residual-simt | kernel-four-branch-residual,kernel-four-branch-residual-tile)
@@ -452,7 +452,7 @@ case "$kind" in
     printf '%s\n' 'ds_read_b64_tr_b8' 'ds_read_b64_tr_b8' \
       'ds_read_b64_tr_b8' 'ds_read_b64_tr_b8'
     printf '%s\n' 'v_mfma_f32_16x16x128_f8f6f4' ;;
-  kda)
+  kda|scalar_attention)
     printf '%s\n' 'ds_bpermute_b32' ;;
   mixed)
     printf '%s\n' \

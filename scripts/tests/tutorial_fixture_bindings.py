@@ -472,8 +472,9 @@ class AttentionCfgSelectionTests(unittest.TestCase):
         document = copy.deepcopy(self.original)
         fixture = next(row for row in document["compilerFixtures"] if row["fixtureId"] == fixture_id)
         symbol, = fixture["compilerInput"]["kernelSymbols"]
+        selection = {"kind": "fixture", "fixtureId": fixture_id, "kernelSymbol": symbol}
         kernel = next(row for row in document["kernelInventory"]["kernels"]
-                      if row["kernelId"] == f"fixture:{fixture_id}:{symbol}")
+                      if selection in row["selections"])
         filename, offset = self.coordinates[fixture_id]
         path = "examples/gfx950_advanced_attention/src/" + filename
         binding = {
@@ -507,7 +508,18 @@ class AttentionCfgSelectionTests(unittest.TestCase):
                 symbol, = fixture["compilerInput"]["kernelSymbols"]
                 identities.setdefault(symbol, []).append(binding["selectionSha256"])
         self.assertEqual(sorted(map(len, identities.values())), [3, 4, 4, 4, 4, 4, 4, 4])
-        self.assertTrue(all(len(values) == len(set(values)) for values in identities.values()))
+        alias_symbols = {
+            "gfx950_kda_decode", "gfx950_kda_chunkwise_prefill",
+            "gfx950_content_sparse_attention", "gfx950_deepseek_sparse_attention",
+            "gfx950_compressed_hybrid_attention",
+        }
+        for symbol, values in identities.items():
+            self.assertEqual(len(values) - len(set(values)), int(symbol in alias_symbols))
+        for stem in ("kda-decode", "kda-prefill", "content-sparse-attention",
+                     "deepseek-sparse-attention", "compressed-hybrid-attention"):
+            simt = self.source_document("gfx950-" + stem + "-simt")[2]
+            tile = self.source_document("gfx950-" + stem + "-tile")[2]
+            self.assertNotEqual(simt["selectionSha256"], tile["selectionSha256"])
 
     def test_same_named_host_fallback_cannot_replace_the_selected_source(self):
         document, _, binding = self.source_document("gfx950-attnres-aggregate")

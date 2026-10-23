@@ -7114,20 +7114,26 @@
             "lessonId": "gfx950-compressed-hybrid-attention",
             "fixtureIds": [
               "gfx950-compressed-hybrid-attention",
-              "gfx950-compressed-hybrid-attention-division-baseline"
+              "gfx950-compressed-hybrid-attention-division-baseline",
+              "gfx950-compressed-hybrid-attention-simt",
+              "gfx950-compressed-hybrid-attention-tile"
             ]
           },
           {
             "lessonId": "gfx950-deepseek-sparse-attention",
             "fixtureIds": [
-              "gfx950-deepseek-sparse-attention"
+              "gfx950-deepseek-sparse-attention",
+              "gfx950-deepseek-sparse-attention-simt",
+              "gfx950-deepseek-sparse-attention-tile"
             ]
           },
           {
             "lessonId": "gfx950-indexed-sparse-attention",
             "fixtureIds": [
               "gfx950-content-sparse-attention",
-              "gfx950-content-sparse-attention-reciprocal-reuse"
+              "gfx950-content-sparse-attention-reciprocal-reuse",
+              "gfx950-content-sparse-attention-simt",
+              "gfx950-content-sparse-attention-tile"
             ]
           },
           {
@@ -7136,7 +7142,11 @@
               "gfx950-kda-decode",
               "gfx950-kda-decode-baseline",
               "gfx950-kda-prefill",
-              "gfx950-kda-prefill-baseline"
+              "gfx950-kda-prefill-baseline",
+              "gfx950-kda-decode-simt",
+              "gfx950-kda-decode-tile",
+              "gfx950-kda-prefill-simt",
+              "gfx950-kda-prefill-tile"
             ]
           }
         ]
@@ -8852,6 +8862,246 @@
             "lessonId": "gfx950-attnres-gr-mhc",
             "fixtureIds": [
               "gfx950-mhc-sinkhorn-mix-tile"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-kda-decode-simt",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-kda-decode-simt"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "Adapter and fresh qualification remain pending; this retained command is an obligation, not an execution receipt.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-kda-gdn-linear-attention",
+            "fixtureIds": [
+              "gfx950-kda-decode-simt"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-kda-decode-tile",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-kda-decode-tile"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "Adapter and fresh qualification remain pending; this retained command is an obligation, not an execution receipt.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-kda-gdn-linear-attention",
+            "fixtureIds": [
+              "gfx950-kda-decode-tile"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-kda-prefill-simt",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-kda-prefill-simt"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "Adapter and fresh qualification remain pending; this retained command is an obligation, not an execution receipt.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-kda-gdn-linear-attention",
+            "fixtureIds": [
+              "gfx950-kda-prefill-simt"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-kda-prefill-tile",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-kda-prefill-tile"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "Adapter and fresh qualification remain pending; this retained command is an obligation, not an execution receipt.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-kda-gdn-linear-attention",
+            "fixtureIds": [
+              "gfx950-kda-prefill-tile"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-content-sparse-attention-simt",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-content-sparse-attention-simt"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "Adapter and fresh qualification remain pending; this retained command is an obligation, not an execution receipt.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-indexed-sparse-attention",
+            "fixtureIds": [
+              "gfx950-content-sparse-attention-simt"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-content-sparse-attention-tile",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-content-sparse-attention-tile"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "Adapter and fresh qualification remain pending; this retained command is an obligation, not an execution receipt.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-indexed-sparse-attention",
+            "fixtureIds": [
+              "gfx950-content-sparse-attention-tile"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-deepseek-sparse-attention-simt",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-deepseek-sparse-attention-simt"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "Adapter and fresh qualification remain pending; this retained command is an obligation, not an execution receipt.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-deepseek-sparse-attention",
+            "fixtureIds": [
+              "gfx950-deepseek-sparse-attention-simt"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-deepseek-sparse-attention-tile",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-deepseek-sparse-attention-tile"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "Adapter and fresh qualification remain pending; this retained command is an obligation, not an execution receipt.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-deepseek-sparse-attention",
+            "fixtureIds": [
+              "gfx950-deepseek-sparse-attention-tile"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-compressed-hybrid-attention-simt",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-compressed-hybrid-attention-simt"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "Adapter and fresh qualification remain pending; this retained command is an obligation, not an execution receipt.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-compressed-hybrid-attention",
+            "fixtureIds": [
+              "gfx950-compressed-hybrid-attention-simt"
+            ]
+          }
+        ]
+      },
+      {
+        "suiteId": "semantic-simulation-gfx950-compressed-hybrid-attention-tile",
+        "gate": "semantic-simulation",
+        "availability": "pending",
+        "command": {
+          "executable": "scripts/run-tutorial-compiler-fixture-simulation.py",
+          "arguments": [
+            "--fixture-id",
+            "gfx950-compressed-hybrid-attention-tile"
+          ],
+          "environment": [],
+          "workingDirectory": ".",
+          "timeoutSeconds": 3600
+        },
+        "unavailableReason": "Adapter and fresh qualification remain pending; this retained command is an obligation, not an execution receipt.",
+        "coverage": [
+          {
+            "lessonId": "gfx950-compressed-hybrid-attention",
+            "fixtureIds": [
+              "gfx950-compressed-hybrid-attention-tile"
             ]
           }
         ]
@@ -13118,6 +13368,11 @@
             "kind": "fixture",
             "fixtureId": "gfx950-compressed-hybrid-attention",
             "kernelSymbol": "gfx950_compressed_hybrid_attention"
+          },
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-compressed-hybrid-attention-tile",
+            "kernelSymbol": "gfx950_compressed_hybrid_attention"
           }
         ],
         "variants": [
@@ -13146,7 +13401,7 @@
             "kind": "tile",
             "status": "source-bound",
             "source": {
-              "implementationKernelId": "fixture:gfx950-compressed-hybrid-attention-tile:gfx950_compressed_hybrid_attention",
+              "implementationKernelId": "fixture:gfx950-compressed-hybrid-attention:gfx950_compressed_hybrid_attention",
               "selection": {
                 "kind": "fixture",
                 "fixtureId": "gfx950-compressed-hybrid-attention-tile",
@@ -13215,6 +13470,11 @@
             "kind": "fixture",
             "fixtureId": "gfx950-content-sparse-attention",
             "kernelSymbol": "gfx950_content_sparse_attention"
+          },
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-content-sparse-attention-tile",
+            "kernelSymbol": "gfx950_content_sparse_attention"
           }
         ],
         "variants": [
@@ -13243,7 +13503,7 @@
             "kind": "tile",
             "status": "source-bound",
             "source": {
-              "implementationKernelId": "fixture:gfx950-content-sparse-attention-tile:gfx950_content_sparse_attention",
+              "implementationKernelId": "fixture:gfx950-content-sparse-attention:gfx950_content_sparse_attention",
               "selection": {
                 "kind": "fixture",
                 "fixtureId": "gfx950-content-sparse-attention-tile",
@@ -13269,6 +13529,11 @@
             "kind": "fixture",
             "fixtureId": "gfx950-deepseek-sparse-attention",
             "kernelSymbol": "gfx950_deepseek_sparse_attention"
+          },
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-deepseek-sparse-attention-simt",
+            "kernelSymbol": "gfx950_deepseek_sparse_attention"
           }
         ],
         "variants": [
@@ -13276,7 +13541,7 @@
             "kind": "simt",
             "status": "source-bound",
             "source": {
-              "implementationKernelId": "fixture:gfx950-deepseek-sparse-attention-simt:gfx950_deepseek_sparse_attention",
+              "implementationKernelId": "fixture:gfx950-deepseek-sparse-attention:gfx950_deepseek_sparse_attention",
               "selection": {
                 "kind": "fixture",
                 "fixtureId": "gfx950-deepseek-sparse-attention-simt",
@@ -13815,6 +14080,11 @@
             "kind": "fixture",
             "fixtureId": "gfx950-kda-decode",
             "kernelSymbol": "gfx950_kda_decode"
+          },
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-kda-decode-simt",
+            "kernelSymbol": "gfx950_kda_decode"
           }
         ],
         "variants": [
@@ -13822,7 +14092,7 @@
             "kind": "simt",
             "status": "source-bound",
             "source": {
-              "implementationKernelId": "fixture:gfx950-kda-decode-simt:gfx950_kda_decode",
+              "implementationKernelId": "fixture:gfx950-kda-decode:gfx950_kda_decode",
               "selection": {
                 "kind": "fixture",
                 "fixtureId": "gfx950-kda-decode-simt",
@@ -13912,6 +14182,11 @@
             "kind": "fixture",
             "fixtureId": "gfx950-kda-prefill",
             "kernelSymbol": "gfx950_kda_chunkwise_prefill"
+          },
+          {
+            "kind": "fixture",
+            "fixtureId": "gfx950-kda-prefill-simt",
+            "kernelSymbol": "gfx950_kda_chunkwise_prefill"
           }
         ],
         "variants": [
@@ -13919,7 +14194,7 @@
             "kind": "simt",
             "status": "source-bound",
             "source": {
-              "implementationKernelId": "fixture:gfx950-kda-prefill-simt:gfx950_kda_chunkwise_prefill",
+              "implementationKernelId": "fixture:gfx950-kda-prefill:gfx950_kda_chunkwise_prefill",
               "selection": {
                 "kind": "fixture",
                 "fixtureId": "gfx950-kda-prefill-simt",
@@ -15018,76 +15293,12 @@
         ]
       },
       {
-        "kernelId": "fixture:gfx950-kda-decode-simt:gfx950_kda_decode",
-        "selections": [
-          {
-            "kind": "fixture",
-            "fixtureId": "gfx950-kda-decode-simt",
-            "kernelSymbol": "gfx950_kda_decode"
-          }
-        ],
-        "variants": [
-          {
-            "kind": "simt",
-            "status": "pending",
-            "source": null,
-            "blocker": {
-              "owner": "issue275-integration",
-              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Implementation selection is registered; this implementation identity does not duplicate the advertised parent's SIMT/tile association. Required per-target source, simulation, proof, and hardware evidence remain pending."
-            }
-          },
-          {
-            "kind": "tile",
-            "status": "pending",
-            "source": null,
-            "blocker": {
-              "owner": "issue275-integration",
-              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Implementation selection is registered; this implementation identity does not duplicate the advertised parent's SIMT/tile association. Required per-target source, simulation, proof, and hardware evidence remain pending."
-            }
-          }
-        ]
-      },
-      {
         "kernelId": "fixture:gfx950-kda-decode-tile:gfx950_kda_decode",
         "selections": [
           {
             "kind": "fixture",
             "fixtureId": "gfx950-kda-decode-tile",
             "kernelSymbol": "gfx950_kda_decode"
-          }
-        ],
-        "variants": [
-          {
-            "kind": "simt",
-            "status": "pending",
-            "source": null,
-            "blocker": {
-              "owner": "issue275-integration",
-              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Implementation selection is registered; this implementation identity does not duplicate the advertised parent's SIMT/tile association. Required per-target source, simulation, proof, and hardware evidence remain pending."
-            }
-          },
-          {
-            "kind": "tile",
-            "status": "pending",
-            "source": null,
-            "blocker": {
-              "owner": "issue275-integration",
-              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Implementation selection is registered; this implementation identity does not duplicate the advertised parent's SIMT/tile association. Required per-target source, simulation, proof, and hardware evidence remain pending."
-            }
-          }
-        ]
-      },
-      {
-        "kernelId": "fixture:gfx950-kda-prefill-simt:gfx950_kda_chunkwise_prefill",
-        "selections": [
-          {
-            "kind": "fixture",
-            "fixtureId": "gfx950-kda-prefill-simt",
-            "kernelSymbol": "gfx950_kda_chunkwise_prefill"
           }
         ],
         "variants": [
@@ -15178,70 +15389,6 @@
         ]
       },
       {
-        "kernelId": "fixture:gfx950-content-sparse-attention-tile:gfx950_content_sparse_attention",
-        "selections": [
-          {
-            "kind": "fixture",
-            "fixtureId": "gfx950-content-sparse-attention-tile",
-            "kernelSymbol": "gfx950_content_sparse_attention"
-          }
-        ],
-        "variants": [
-          {
-            "kind": "simt",
-            "status": "pending",
-            "source": null,
-            "blocker": {
-              "owner": "issue275-integration",
-              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Implementation selection is registered; this implementation identity does not duplicate the advertised parent's SIMT/tile association. Required per-target source, simulation, proof, and hardware evidence remain pending."
-            }
-          },
-          {
-            "kind": "tile",
-            "status": "pending",
-            "source": null,
-            "blocker": {
-              "owner": "issue275-integration",
-              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Implementation selection is registered; this implementation identity does not duplicate the advertised parent's SIMT/tile association. Required per-target source, simulation, proof, and hardware evidence remain pending."
-            }
-          }
-        ]
-      },
-      {
-        "kernelId": "fixture:gfx950-deepseek-sparse-attention-simt:gfx950_deepseek_sparse_attention",
-        "selections": [
-          {
-            "kind": "fixture",
-            "fixtureId": "gfx950-deepseek-sparse-attention-simt",
-            "kernelSymbol": "gfx950_deepseek_sparse_attention"
-          }
-        ],
-        "variants": [
-          {
-            "kind": "simt",
-            "status": "pending",
-            "source": null,
-            "blocker": {
-              "owner": "issue275-integration",
-              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Implementation selection is registered; this implementation identity does not duplicate the advertised parent's SIMT/tile association. Required per-target source, simulation, proof, and hardware evidence remain pending."
-            }
-          },
-          {
-            "kind": "tile",
-            "status": "pending",
-            "source": null,
-            "blocker": {
-              "owner": "issue275-integration",
-              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Implementation selection is registered; this implementation identity does not duplicate the advertised parent's SIMT/tile association. Required per-target source, simulation, proof, and hardware evidence remain pending."
-            }
-          }
-        ]
-      },
-      {
         "kernelId": "fixture:gfx950-deepseek-sparse-attention-tile:gfx950_deepseek_sparse_attention",
         "selections": [
           {
@@ -15279,38 +15426,6 @@
           {
             "kind": "fixture",
             "fixtureId": "gfx950-compressed-hybrid-attention-simt",
-            "kernelSymbol": "gfx950_compressed_hybrid_attention"
-          }
-        ],
-        "variants": [
-          {
-            "kind": "simt",
-            "status": "pending",
-            "source": null,
-            "blocker": {
-              "owner": "issue275-integration",
-              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Implementation selection is registered; this implementation identity does not duplicate the advertised parent's SIMT/tile association. Required per-target source, simulation, proof, and hardware evidence remain pending."
-            }
-          },
-          {
-            "kind": "tile",
-            "status": "pending",
-            "source": null,
-            "blocker": {
-              "owner": "issue275-integration",
-              "issue": "https://github.com/harsh-nod/fe2o3/issues/275",
-              "reason": "Implementation selection is registered; this implementation identity does not duplicate the advertised parent's SIMT/tile association. Required per-target source, simulation, proof, and hardware evidence remain pending."
-            }
-          }
-        ]
-      },
-      {
-        "kernelId": "fixture:gfx950-compressed-hybrid-attention-tile:gfx950_compressed_hybrid_attention",
-        "selections": [
-          {
-            "kind": "fixture",
-            "fixtureId": "gfx950-compressed-hybrid-attention-tile",
             "kernelSymbol": "gfx950_compressed_hybrid_attention"
           }
         ],
