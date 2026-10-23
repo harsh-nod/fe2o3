@@ -9129,11 +9129,11 @@
       },
       "compilerInput": {
         "packageManifest": "examples/wave64_collectives_v1/Cargo.toml",
-        "packageManifestSha256": "6561d106d041e6e2e53ade56f9e9fd2e8adacb43d37cd4e027049c2bb7ae1471",
+        "packageManifestSha256": "0e4f789118ee5d1591d8b6b7e5c7bdb17874b69142c39204c18c7af28a0d0332",
         "sourcePaths": [
           "examples/wave64_collectives_v1/src/kernel.rs"
         ],
-        "sourceClosureSha256": "83225422e4be2578b73fa999dc442a8cf82a96b82a7a10ed956b3167ee65cfc1",
+        "sourceClosureSha256": "97901d416d9cf1c29916808cb1ab5ff6d1f0952c40c8eb98e79e162292a6483a",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_wave64_collectives_v1",
@@ -9146,7 +9146,7 @@
         ],
         "cargoLockPath": "examples/wave64_collectives_v1/Cargo.lock",
         "cargoLockSha256": "016cae28a2674c26eee4de9a5bd846b6a7367f92c2c0a5e36d9282a824fb813e",
-        "contractSha256": "28aa13684407ab1c4ad16e94d870900c733270861a6d8a193a3243f60adaaf03"
+        "contractSha256": "25d18b5e58865e1d86043589af9ca1237a93349ab6ae237360b9b4ea3d569f71"
       },
       "simulation": {
         "requestPath": "examples/wave64_collectives_v1/full-mask-request.json",
@@ -12842,7 +12842,7 @@
                 "fixtureId": "gfx942-wave64-collectives",
                 "kernelSymbol": "wave64_collectives_v1"
               },
-              "selectionSha256": "ac2a92331d5ef0a34131f524a1df4595134348a9056e6fd13b405f3c06fa792d",
+              "selectionSha256": "7a457091569790fd8c0a66804316dda30a5d2110fa149b705ba2650cbcd28ef5",
               "sourcePath": "examples/wave64_collectives_v1/src/kernel.rs",
               "sourceSha256": "3f7064730fdb52aa815cace2bcfd9a666628302506b14771c05487c95922eb4d",
               "functionUtf8Offset": 842
