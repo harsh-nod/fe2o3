@@ -70,34 +70,39 @@ class FixtureBindingTests(unittest.TestCase):
             name = lesson["lessonId"].removesuffix("-performance-lab")
             start = EXCERPTS[name][int(performance)]
             if name == "gfx950-fp8-attention":
-                # Current-source test projection, not a published lesson refresh.
+                # The current display must not reuse the retained historical
+                # excerpt identity, even when supplied with current bytes.
                 historical_size, historical_digest, size, digest = (
                     (20521, "69650ea2502ee149949d6cbec3e909032ede026be47ca52568bda455b9d9ef2c",
                      10537, "1868eedc608691d53c7f90358540a8546a54af90a1b9bbf6f38b21a38117bb07"),
                     (20421, "0a06ba5894d9afa1504dd036f9a0c8a4b3deb242156f37d5930f047d5ec1d5f1",
                      10437, "db02c7da83c25654b6a87590caff9d84965ac91e4ebbac52cbf6ebaf8aa91001"),
                 )[int(performance)]
-                self.assertEqual(tab["displayedUtf8Bytes"], historical_size)
-                self.assertEqual(tab["displayedSha256"], historical_digest)
-                self.assertEqual(tab["sourceSha256"], historical_digest)
+                self.assertEqual(tab["displayedUtf8Bytes"], size)
+                self.assertEqual(tab["displayedSha256"], digest)
+                self.assertEqual(tab["sourceSha256"], digest)
                 current = physical[start:start + size].decode("utf-8")
                 self.assertEqual(hashlib.sha256(current.encode("utf-8")).hexdigest(), digest)
-                historical_live = {**tab, "displayedCode": current,
+                historical_tab = copy.deepcopy(tab)
+                historical_tab.update(displayedUtf8Bytes=historical_size,
+                                      displayedSha256=historical_digest,
+                                      sourceSha256=historical_digest)
+                if historical_tab["sourceFragmentsSha256"] is not None:
+                    historical_tab["sourceFragmentsSha256"] = [historical_digest]
+                historical_live = {**historical_tab, "displayedCode": current,
                                    "sourceFragments": [current] if tab["sourceFragmentsSha256"] is not None else None}
                 # Current bytes cannot acquire the retained historical display binding.
                 with self.assertRaisesRegex(SystemExit, "displayed bytes do not match"):
                     self.parent.validate_site_inventory(
                         {"site": runtime["site"], "lessons": [
-                            {"lessonId": lesson["lessonId"], "codeTabs": [tab]},
+                            {"lessonId": lesson["lessonId"], "codeTabs": [historical_tab]},
                         ]},
                         {"schema": runtime["schema"], "site": runtime["site"], "lessons": [
                             {"id": lesson["lessonId"], "codeTabs": [historical_live]},
                         ]},
                     )
-                tab.update(displayedUtf8Bytes=size, displayedSha256=digest, sourceSha256=digest)
                 if tab["sourceFragmentsSha256"] is not None:
-                    self.assertEqual(tab["sourceFragmentsSha256"], [historical_digest])
-                    tab["sourceFragmentsSha256"] = [digest]
+                    self.assertEqual(tab["sourceFragmentsSha256"], [digest])
             excerpt = physical[start:start + tab["displayedUtf8Bytes"]].decode("utf-8")
             row = next(row for row in inventory["displayItems"] if row["lessonId"] == lesson["lessonId"])
             self.assertEqual(start + row["functionUtf8Offset"], EXCERPTS[name][2])
@@ -179,14 +184,16 @@ class FixtureBindingTests(unittest.TestCase):
 
 
 class WholeFileFixtureBindingTests(FixtureBindingTests):
-    expected_displays = 20
+    expected_displays = 39
     changed_source_error = "exact current source occurrence"
     # Independent whole-file sizes, digests and every displayed function offset.
     sources = {
         "flash-attention": (
-            "gfx942-flash-attention", "flash_attention_general_v1", 16061,
-            "f160e1391e1b354657049b5b11d745428fbbfb8fb6e5e2fceb4143ac93e7b00b",
-            [885, 1688, 15154, 15319]),
+            "gfx942-flash-attention", "flash_attention_general_v1", 34804,
+            "72fd0148eb5a29c0747ec6b96616eeb4aed15939b365890846c49e1c1d0fbc50",
+            [1174, 1480, 1786, 2428, 2517, 3320, 19160, 19354, 20201, 20526,
+             21019, 21799, 23944, 26314, 27580, 29032, 30182, 30982, 31514,
+             32759, 33363, 33897, 34062]),
         "gemm-autoresearch": (
             "gfx942-gemm-autoresearch", "gemm_autoresearch_v1", 5194,
             "abae10d3a6657c89358a5fecf72359d120b917d0664f7df51de3f7b61b1b4f54",
@@ -222,7 +229,7 @@ class WholeFileFixtureBindingTests(FixtureBindingTests):
         self.assertEqual(len(inventory["kernels"]), self.expected_identities)
         self.assertEqual(len(inventory["displayItems"]), self.expected_displays)
         helpers = [row for row in inventory["displayItems"] if row["classification"] == "helper"]
-        self.assertEqual(len(helpers), 16)
+        self.assertEqual(len(helpers), 35)
         self.assertTrue(all(row["bindingStatus"] == "not-applicable" and row["kernelIds"] == []
                             for row in helpers))
         document["curriculum"]["lessons"] = [
