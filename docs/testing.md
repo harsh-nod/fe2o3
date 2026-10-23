@@ -620,6 +620,16 @@ HSACO, HIP, or GPU execution refines that model.
 
 ## ROCm compile coverage
 
+Install the [root requirements](../README.md#requirements) first. Before either
+matrix, complete the selected examples' network-enabled locked dependency setup
+in the same effective `CARGO_HOME` for the root workspace, each selected example
+manifest, and the pinned nightly `rust-src` workspace. Some selected adapters
+unconditionally invoke Cargo with `--locked --offline`, even when the matrix
+host has network access. Root workspace fetching alone does not guarantee that
+the independent example and `rust-src` locked closures are cached. Follow the
+existing per-example setup, such as the
+[row-softmax instructions](../examples/row_softmax_general_v1/README.md#build-and-numerical-qualification).
+
 Set the admitted LLVM target and run the bounded production compiler gates:
 
 ```text
@@ -647,9 +657,9 @@ and code-object tests. The generic lane runs the matrix's hermetic shell test,
 which substitutes fixture tools and verifies orchestration without requiring
 ROCm or a GPU.
 
-The separate gfx950 matrix covers 37 production Rust kernel entries represented
-by the kernels site. Together with the five gfx942 entries, the compile-only
-matrices cover 42 entries:
+The separate gfx950 matrix covers 84 compile-only fixture selections represented
+by the kernels site. Together with the 11 gfx942 selections, the compile-only
+matrices cover 95 manifest-enumerated fixtures:
 
 ```text
 scripts/kernel-compile-matrix.sh gfx950
