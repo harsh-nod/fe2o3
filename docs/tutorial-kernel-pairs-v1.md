@@ -227,6 +227,10 @@ CPU test results as per-variant target qualification receipts.
 The report is bounded to 4096 charged projection/inventory records, including
 input tabs, references and scanned items, and 16 MiB of encoded JSON. Each Rust
 scan is limited to 4 MiB and 4096 declarations. Exhaustion rejects without partial JSON.
+Physical selection work has separate aggregate caps of 8192 source-item visits
+and 8192 attribute visits. The complete 95-fixture catalog exceeds the former
+4096 attribute-work capacity; the record, byte, depth and source-item bounds are
+unchanged. These are traversal limits, not qualification or native-memory limits.
 The tests run in the existing `scripts/tests/kernel-compile-matrix.sh` CI gate.
 
 ## Kernel Identity Extension

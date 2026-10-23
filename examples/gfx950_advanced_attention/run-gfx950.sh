@@ -42,7 +42,7 @@ if [[ $SUITE == systems ]]; then
 fi
 ADVANCED_MODE=${FE2O3_GFX950_ADVANCED_MODE:-canonical}
 MODE_FEATURE=
-if [[ $ADVANCED_MODE != canonical ]]; then
+if [[ $SUITE != systems && $ADVANCED_MODE != canonical ]]; then
     case "$SUITE:$FEATURE:$ADVANCED_MODE" in
         gpt_oss:kernel-gpt-oss-decode:simt|gpt_oss:kernel-gpt-oss-decode:tile|\
         gpt_oss:kernel-gpt-oss-decode-router-serial:simt|gpt_oss:kernel-gpt-oss-decode-router-serial:tile|\

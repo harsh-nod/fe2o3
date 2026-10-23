@@ -29,7 +29,9 @@ MAX_INCLUDE_DEPTH = 32
 # the current 68-fixture catalog needs 4,324 visits but only 1,651 records.
 MAX_SOURCE_ITEM_VISITS = 8192
 # Exported report rows reduce record capacity, not physical attribute work.
-MAX_ATTRIBUTE_VISITS = 4096
+# The complete 95-fixture catalog exceeds 4,096 attribute visits. Keep a finite
+# independent work bound without changing record, source-byte or item limits.
+MAX_ATTRIBUTE_VISITS = 8192
 BUILTIN_DERIVES = frozenset({"Clone", "Copy", "Debug", "Default", "Eq", "PartialEq", "Ord", "PartialOrd", "Hash"})
 IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 KERNEL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}")
