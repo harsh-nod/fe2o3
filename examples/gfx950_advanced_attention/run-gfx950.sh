@@ -194,6 +194,18 @@ READOBJ=${READOBJ:-$ROCM_PATH/llvm/bin/llvm-readobj}
 SHA256SUM=${SHA256SUM:-sha256sum}
 GIT=${GIT:-git}
 COMPILE_ONLY=${FE2O3_EXAMPLE_COMPILE_ONLY:-0}
+if [[ $SUITE == gpt_oss ]]; then
+    GPU=${ROCR_VISIBLE_DEVICES:-}
+    if [[ -z $GPU && $COMPILE_ONLY != 1 ]]; then
+        printf 'GPT-OSS runtime requires one explicit ROCR_VISIBLE_DEVICES UUID or ordinal\n' >&2
+        exit 2
+    fi
+    if [[ -n $GPU && ! $GPU =~ ^([0-9]+|GPU-[[:xdigit:]]{16})$ ]]; then
+        printf 'GPT-OSS runtime requires a single GPU UUID or ordinal, got %s\n' "$GPU" >&2
+        exit 2
+    fi
+    unset HIP_VISIBLE_DEVICES
+fi
 
 if [[ $COMPILE_ONLY != 0 && $COMPILE_ONLY != 1 ]]; then
     printf 'FE2O3_EXAMPLE_COMPILE_ONLY must be 0 or 1\n' >&2
@@ -543,6 +555,16 @@ SOURCE_COMMIT=$("$GIT" -C "$REPO_ROOT" rev-parse --verify 'HEAD^{commit}')
 SOURCE_TREE=$("$GIT" -C "$REPO_ROOT" rev-parse --verify 'HEAD^{tree}')
 (
     cd -- "$REPO_ROOT"
+    TEST_LIST=$(CARGO_TARGET_DIR=$ROOT_TARGET_DIR \
+        "$RUSTUP" run "$TOOLCHAIN" "$CARGO_BIN" test --locked \
+        -p fe2o3-hsa-runtime --features hardware-qualification \
+        --test gfx950_advanced_hardware "$TEST" -- --ignored --exact --list)
+    if [[ $(grep -Fxc -- "$TEST: test" <<< "$TEST_LIST" || true) -ne 1 \
+        || $(grep -Ec -- ': test$' <<< "$TEST_LIST" || true) -ne 1 ]]; then
+        printf 'hardware selector discovery requires exactly one test: %s\n%s\n' \
+            "$TEST" "$TEST_LIST" >&2
+        exit 1
+    fi
     FE2O3_RUN_GFX950_ADVANCED_HARDWARE=1 \
     FE2O3_GFX950_ADVANCED_HSACO=$HSACO \
     FE2O3_GFX950_ADVANCED_SHA256=$HSACO_SHA256 \

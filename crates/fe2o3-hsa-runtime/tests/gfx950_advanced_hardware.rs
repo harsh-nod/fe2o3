@@ -612,6 +612,45 @@ fn require(condition: bool, message: impl Into<String>) -> Result<(), BoxError> 
 }
 
 #[cfg(feature = "hardware-test-hooks")]
+fn gpt_runtime_visibility_is_single(value: Option<&str>) -> bool {
+    value.is_some_and(|value| {
+        !value.is_empty()
+            && (value.bytes().all(|byte| byte.is_ascii_digit())
+                || value.strip_prefix("GPU-").is_some_and(|uuid| {
+                    uuid.len() == 16 && uuid.bytes().all(|byte| byte.is_ascii_hexdigit())
+                }))
+    })
+}
+
+#[cfg(feature = "hardware-test-hooks")]
+fn require_gpt_runtime_visibility() -> Result<(), BoxError> {
+    let value = std::env::var_os("ROCR_VISIBLE_DEVICES");
+    require(
+        gpt_runtime_visibility_is_single(value.as_deref().and_then(|value| value.to_str())),
+        "GPT-OSS runtime requires one explicit ROCR_VISIBLE_DEVICES UUID or ordinal",
+    )
+}
+
+#[cfg(feature = "hardware-test-hooks")]
+#[test]
+fn gpt_runtime_visibility_requires_one_explicit_device() {
+    for value in [
+        None,
+        Some(""),
+        Some("0,1"),
+        Some("-1"),
+        Some(" 0"),
+        Some("GPU-0123"),
+        Some("GPU-0123456789abcdeg"),
+    ] {
+        assert!(!gpt_runtime_visibility_is_single(value), "{value:?}");
+    }
+    for value in ["0", "12", "GPU-0123456789abcdef", "GPU-ABCDEF0123456789"] {
+        assert!(gpt_runtime_visibility_is_single(Some(value)), "{value:?}");
+    }
+}
+
+#[cfg(feature = "hardware-test-hooks")]
 fn kernarg_size(args: &[AbiArg]) -> usize {
     let size = args
         .iter()
@@ -2683,6 +2722,7 @@ fn gpt_unfused_profile_plans() -> Result<Vec<(AdvancedCase, LaunchPlan)>, BoxErr
 
 #[cfg(feature = "hardware-test-hooks")]
 fn run_gpt_unfused_comparator() -> Result<(), BoxError> {
+    require_gpt_runtime_visibility()?;
     let (bytes, digest) = read_pinned_hsaco()?;
     inspect_gpt_unfused_profile(&bytes)?;
     let plan = gpt_oss_single_plan(GPT_OSS_UNFUSED_ROUTER)?;
@@ -3018,6 +3058,9 @@ fn profile_plan(
 
 #[cfg(feature = "hardware-test-hooks")]
 fn run_case(mut case: AdvancedCase) -> Result<(), BoxError> {
+    if case.export.starts_with("gfx950_gpt_oss_") {
+        require_gpt_runtime_visibility()?;
+    }
     let plan_case = case;
     if let Some(value) = std::env::var_os(WORKGROUP_X_ENV) {
         let value = value
