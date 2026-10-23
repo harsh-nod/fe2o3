@@ -9043,7 +9043,7 @@
         "sourcePaths": [
           "examples/tiled_gemm_general_v1/src/kernel.rs"
         ],
-        "sourceClosureSha256": "c6893efaf362327799787f1c6e0c3e19d61471600c1dadd1034e5af05de5fe26",
+        "sourceClosureSha256": "65ffa31417955c359ab84fa9bcd2c4131d5ec4b55ea4675f5e05c4c8545a3949",
         "cargoTarget": {
           "kind": "lib",
           "name": "fe2o3_tiled_gemm_general_v1",
@@ -9056,7 +9056,7 @@
         ],
         "cargoLockPath": "examples/tiled_gemm_general_v1/Cargo.lock",
         "cargoLockSha256": "47b249dbdaadab6048a572b180c065c06e8d519d4277cecd00bbd58a99c92303",
-        "contractSha256": "bf67b123252d7b7908e489e08fe93f3e08e3bb3528d6022b40b5ff8eaea518ef"
+        "contractSha256": "9492db16d9d526209333e75576abe5c0234efa31884890a3050269f78a92b653"
       },
       "simulation": {
         "requestPath": "config/tutorial-simulation-v1/gfx942-tiled-gemm.request.json",
@@ -14378,8 +14378,8 @@
           "fixture:gfx942-tiled-gemm:tiled_gemm_general_v1"
         ],
         "negativeCases": [],
-        "bindingStatus": "fixture-source-contract",
-        "reason": "The exact whole-file display and physical function offset bind the registered fixture source selection only; historical execution evidence does not qualify a SIMT/tile pair."
+        "bindingStatus": "pending",
+        "reason": "The published whole-file display remains at its historical source revision. The current GEMM fixture source has changed; refresh the lesson snapshot and exact occurrence binding after the compatible public core revision is accepted. Kernel identity and required variant obligations are retained."
       },
       {
         "lessonId": "gemm-tiling",
