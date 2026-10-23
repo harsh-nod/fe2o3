@@ -170,18 +170,18 @@ use fe2o3_mir_model::semantic_mir_v1::{
     SemanticMfmaOperandContractV1, SemanticMfmaOperandRoleV1, SemanticMfmaProfileV1,
     SemanticMfmaRegisterDistributionV1, SemanticMfmaStorageLayoutV1, SemanticMutabilityV1,
     SemanticOperandV1, SemanticPlaceV1, SemanticPointerKindV1, SemanticPointerMetadataV1,
-    SemanticProjectionKindV1, SemanticRvalueKindV1, SemanticRvalueV1, SemanticScalarTypeV1,
-    SemanticSourceArgumentOwnershipV1, SemanticSourceProvenanceV1, SemanticStatementKindV1,
-    SemanticSwitchTargetsV1, SemanticTerminatorKindV1, SemanticTypeDeclV1, SemanticTypeIdV1,
-    SemanticTypeShapeV1, SemanticUnaryOpV1, SemanticUncheckedBinaryOpV1, SemanticUnwindActionV1,
-    SemanticVolatilityV1, SemanticWorkgroupPipelineEventV1, SemanticWorkgroupScanKindV1,
-    SemanticWriteOnlyDisjointWriteKindV1, exact_transparent_scalar_carrier_field_v1,
+    SemanticProjectionKindV1, SemanticRustTypeKindV1, SemanticRvalueKindV1, SemanticRvalueV1,
+    SemanticScalarTypeV1, SemanticSourceArgumentOwnershipV1, SemanticSourceProvenanceV1,
+    SemanticStatementKindV1, SemanticSwitchTargetsV1, SemanticTerminatorKindV1, SemanticTypeDeclV1,
+    SemanticTypeIdV1, SemanticTypeShapeV1, SemanticUnaryOpV1, SemanticUncheckedBinaryOpV1,
+    SemanticUnwindActionV1, SemanticVolatilityV1, SemanticWorkgroupPipelineEventV1,
+    SemanticWorkgroupScanKindV1, SemanticWriteOnlyDisjointWriteKindV1,
+    exact_transparent_scalar_carrier_field_v1,
 };
 #[cfg(test)]
 use fe2o3_mir_model::semantic_mir_v1::{
     SemanticBackendScalarV1, SemanticExternAbiV1, SemanticFieldsShapeV1, SemanticFunctionSafetyV1,
-    SemanticRustTypeKindV1, SemanticRustcVariantsV1, SemanticTargetArchitectureV1,
-    SemanticTypeLayoutDetailsV1,
+    SemanticRustcVariantsV1, SemanticTargetArchitectureV1, SemanticTypeLayoutDetailsV1,
 };
 use fe2o3_mir_model::{
     SemanticEnumPayloadAvailabilityV1, SemanticEnumPayloadDominanceV1,
@@ -5258,6 +5258,7 @@ fn exact_less_than_definition_v1(
 
 fn project_authenticated_capabilities_v1(
     callables: &[SemanticCallableDeclV1],
+    types: &[SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,
     enum_payload_dominance: &SemanticEnumPayloadDominanceV1,
     local_allocations: &[Option<AllocationContractV1>],
@@ -5285,6 +5286,7 @@ fn project_authenticated_capabilities_v1(
     )?;
     let pipeline_payloads = collect_workgroup_pipeline_payloads_v1(
         callables,
+        types,
         function,
         enum_payload_dominance,
         &pipeline_owners,
@@ -5540,8 +5542,53 @@ fn propagate_capability_dataflow_v1(
     Ok(entries)
 }
 
+/// Plain scalar payloads carry their semantic type, not tensor issuance authority.
+/// The physical value remains in semantic MIR and is transported by the existing
+/// typed KIR pipeline load/store lowering.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ProjectedPipelinePayloadV1 {
+    Scalar(SemanticTypeIdV1),
+    Mfma {
+        element: SemanticTypeIdV1,
+        operand: ProjectedMfmaOperandV1,
+    },
+}
+
+fn plain_workgroup_pipeline_scalar_v1(
+    types: &[SemanticTypeDeclV1],
+    element: SemanticTypeIdV1,
+) -> bool {
+    let Some(declaration) = types.get(element.index() as usize) else {
+        return false;
+    };
+    if !matches!(
+        declaration.rust_type_kind(),
+        SemanticRustTypeKindV1::Ordinary
+            | SemanticRustTypeKindV1::Usize
+            | SemanticRustTypeKindV1::Isize
+    ) {
+        return false;
+    }
+    let bits = match declaration.shape() {
+        SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Integer {
+            bits: bits @ (8 | 16 | 32 | 64),
+            ..
+        })
+        | SemanticTypeShapeV1::Scalar(SemanticScalarTypeV1::Float {
+            bits: bits @ (32 | 64),
+        }) => *bits,
+        _ => return false,
+    };
+    declaration
+        .layout()
+        .size_bytes()
+        .and_then(|bytes| bytes.checked_mul(8))
+        == Some(u64::from(bits))
+}
+
 fn collect_workgroup_pipeline_payloads_v1(
     callables: &[SemanticCallableDeclV1],
+    types: &[SemanticTypeDeclV1],
     function: &SemanticFunctionDeclV1,
     enum_payload_dominance: &SemanticEnumPayloadDominanceV1,
     pipeline_owners: &[Option<usize>],
@@ -5549,16 +5596,24 @@ fn collect_workgroup_pipeline_payloads_v1(
     work: &mut usize,
 ) -> Result<HashMap<usize, ProjectedMfmaOperandV1>, ProductionRankedProjectionErrorV1> {
     let mut payloads = HashMap::new();
+    let mut elements = HashMap::new();
     for (block_index, block) in function.blocks().iter().enumerate() {
         let SemanticTerminatorKindV1::Call(call) = block.terminator().kind() else {
             continue;
         };
-        let Some(SemanticCallableDeclV1::CompilerIntrinsic {
-            operation: SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineWrite { element, .. },
-            ..
-        }) = callables.get(call.callee().index() as usize)
+        let Some(SemanticCallableDeclV1::CompilerIntrinsic { operation, .. }) =
+            callables.get(call.callee().index() as usize)
         else {
             continue;
+        };
+        let (pipeline, element, write) = match operation {
+            SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineWrite { pipeline, element } => {
+                (*pipeline, *element, true)
+            }
+            SemanticCompilerIntrinsicOperationV1::WorkgroupPipelineRead { pipeline, element } => {
+                (*pipeline, *element, false)
+            }
+            _ => continue,
         };
         let Some(entry) = entries.get(block_index).and_then(Option::as_ref) else {
             continue;
@@ -5571,12 +5626,22 @@ fn collect_workgroup_pipeline_payloads_v1(
             &mut state,
             enum_payload_dominance,
         )?;
-        let [receiver, _, _, value] = call.arguments() else {
-            return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                "a workgroup pipeline write lacks its exact receiver, epoch, index, and payload",
-            ));
+        let (receiver, value) = match (write, call.arguments()) {
+            (true, [receiver, _, _, value]) => (receiver, Some(value)),
+            (false, [receiver, _, _])
+                if call
+                    .destination()
+                    .is_some_and(|destination| destination.place().ty() == element) =>
+            {
+                (receiver, None)
+            }
+            _ => {
+                return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                    "a workgroup pipeline access lacks its exact receiver, epoch, index, and payload type",
+                ));
+            }
         };
-        if value.ty() != *element {
+        if value.is_some_and(|value| value.ty() != element) {
             return Err(ProductionRankedProjectionErrorV1::Incomplete(
                 "a workgroup pipeline write payload changed semantic type",
             ));
@@ -5586,27 +5651,65 @@ fn collect_workgroup_pipeline_payloads_v1(
             .copied()
             .flatten()
             .ok_or(ProductionRankedProjectionErrorV1::Incomplete(
-                "a workgroup pipeline write lacks one compiler-owned origin",
+                "a workgroup pipeline access lacks one compiler-owned origin",
             ))?;
-        let Some(ProjectedCapabilityOriginV1::Operand(payload)) =
-            capability_known_origin_v1(&state, value)
-        else {
+        if function
+            .locals()
+            .get(owner)
+            .is_none_or(|local| local.ty() != pipeline)
+        {
             return Err(ProductionRankedProjectionErrorV1::Incomplete(
-                "a workgroup pipeline write lacks one authenticated typed payload",
+                "a workgroup pipeline access changed its compiler-owned pipeline type",
             ));
+        }
+        if elements
+            .insert(owner, element)
+            .is_some_and(|existing| existing != element)
+        {
+            return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                "one workgroup pipeline is used with inconsistent payload types",
+            ));
+        }
+        let Some(value) = value else {
+            continue;
+        };
+        let payload = if plain_workgroup_pipeline_scalar_v1(types, element) {
+            if capability_known_origin_v1(&state, value).is_some() {
+                return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                    "a scalar workgroup pipeline payload carries an incompatible capability origin",
+                ));
+            }
+            ProjectedPipelinePayloadV1::Scalar(element)
+        } else {
+            let Some(ProjectedCapabilityOriginV1::Operand(operand)) =
+                capability_known_origin_v1(&state, value)
+            else {
+                return Err(ProductionRankedProjectionErrorV1::Incomplete(
+                    "a workgroup pipeline write lacks one authenticated typed payload",
+                ));
+            };
+            ProjectedPipelinePayloadV1::Mfma { element, operand }
         };
         match payloads.insert(owner, payload) {
             None => {}
             Some(existing) if existing == payload => {}
-            Some(existing) => {
-                payloads.insert(owner, existing);
+            Some(_) => {
                 return Err(ProductionRankedProjectionErrorV1::Incomplete(
                     "one workgroup pipeline receives incompatible typed payload layouts",
                 ));
             }
         }
     }
-    Ok(payloads)
+    charge_capability_dataflow_work_v1(work, payloads.len())?;
+    // Only fragments carry tensor provenance into subsequent capability reads.
+    // Scalar reads remain ordinary typed values; never mint an MFMA origin for them.
+    Ok(payloads
+        .into_iter()
+        .filter_map(|(owner, payload)| match payload {
+            ProjectedPipelinePayloadV1::Mfma { operand, .. } => Some((owner, operand)),
+            ProjectedPipelinePayloadV1::Scalar(_) => None,
+        })
+        .collect())
 }
 
 fn bind_capability_read_effects_to_call_blocks_v1(
@@ -7720,6 +7823,7 @@ fn project_intrinsic_contracts_with_multi_entry_v1(
     let local_allocations = local_allocation_contracts(types, function, &allocation_origins)?;
     let capability_effects = project_authenticated_capabilities_v1(
         callables,
+        types,
         function,
         &enum_payload_dominance,
         &local_allocations,
@@ -24172,6 +24276,10 @@ mod cold_compile_error_tests;
 
 #[cfg(test)]
 mod tests {
+    mod workgroup_pipeline_payload_tests {
+        use super::*;
+        include!("production_ranked_projection_v1/workgroup_pipeline_payload_v1_tests.rs");
+    }
     mod pipeline_scalar_ssa_tests {
         use super::*;
         include!("production_ranked_projection_v1/pipeline_scalar_ssa_v1_tests.rs");
@@ -39375,6 +39483,7 @@ mod tests {
         let constants = constant_locals(&function).unwrap();
         project_authenticated_capabilities_v1(
             &[],
+            &types,
             &function,
             &enum_payload_dominance,
             &local_allocations,
