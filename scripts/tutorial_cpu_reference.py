@@ -35,9 +35,10 @@ MAX_FILE = 16 * 1024 * 1024
 MAX_MANIFEST = 1024 * 1024
 MAX_SECONDS = 1200
 MAX_BATCH_SUITES = 36
-# Match the existing managed runner's pinned_executable::MAX_EXECUTABLE_BYTES.
+# Match the binding-only host runner's pinned_executable::MAX_BINDING_HOST_TEST_BYTES.
+# The shared tool/authority pin limit remains 512 MiB.
 # This is an on-disk observation limit, not executed-image provenance.
-MAX_EXECUTABLE_BYTES = 512 * 1024 * 1024
+MAX_EXECUTABLE_BYTES = 1024 * 1024 * 1024
 ARTIFACT_HASH_CHUNK = 64 * 1024
 WRAPPER = "scripts/run-tutorial-cpu-reference.sh"
 NO_AUTHORITY = {

@@ -300,8 +300,8 @@ class AdapterComponents(unittest.TestCase):
                     adapter.ObservationError, "wrong harness artifact identity"):
                 self.observe(events)
 
-    def test_artifact_observation_uses_existing_runner_bound_not_data_bounds(self) -> None:
-        self.assertEqual(adapter.MAX_EXECUTABLE_BYTES, 512 * 1024 * 1024)
+    def test_artifact_observation_uses_ordinary_host_runner_bound_not_data_bounds(self) -> None:
+        self.assertEqual(adapter.MAX_EXECUTABLE_BYTES, 1024 * 1024 * 1024)
         self.assertEqual(adapter.ARTIFACT_HASH_CHUNK, 64 * 1024)
         self.assertEqual(adapter.MAX_FILE, 16 * 1024 * 1024)
         self.assertEqual(adapter.MAX_INPUT_BYTES, 256 * 1024 * 1024)

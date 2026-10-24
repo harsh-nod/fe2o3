@@ -349,6 +349,14 @@ targets may build metadata-bound companion binaries; those are not counted as
 executed tests. Executable hashes are post-execution on-disk observations,
 not attestations of the driver's executed image.
 
+The ordinary binding-only host-test runner and this observer allow test images
+up to 1 GiB, hashing in bounded chunks with the existing descriptor and file
+identity checks. The default MoE oracle with debug information measured
+909,946,760 bytes, above the separate 512 MiB tool/authority pin limit. That
+shared default and transferred-descriptor limit remain unchanged. The host-test
+allowance is fixed in source, grants no authority, and does not change build
+profiles, assertions, overflow checks, per-suite deadlines or native limits.
+
 Each run uses private scratch outside the checkout and removes its driver/build
 artifacts. Bounded logs and `observation.json` remain in the reported evidence
 directory. `FE2O3_TUTORIAL_CPU_OUTPUT_ROOT` may select an existing, canonical,
