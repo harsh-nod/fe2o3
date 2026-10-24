@@ -159,3 +159,95 @@ and launching it with an exact physical ABI.
 
 Any resulting HSACO is qualification output. Protected release publication
 and artifact-currentness admission remain a separate, fail-closed pipeline.
+
+## CPU-Only BF16 Source Observations (V6)
+
+From the repository root, install the pinned toolchain and fetch the locked
+dependencies before the offline extraction steps:
+These commands build ordinary compiler/simulator binaries, not GPU execution.
+The complete quickstart sequence below still needs an integrated-checkout run.
+
+```bash
+rustup toolchain install nightly-2026-04-03 --component rust-src --component rustc-dev
+export RUSTC="$(rustup which --toolchain nightly-2026-04-03 rustc)"
+export CARGO="$(rustup which --toolchain nightly-2026-04-03 cargo)"
+export PATH="$(dirname "$CARGO"):$PATH"
+export LD_LIBRARY_PATH="$("$RUSTC" --print sysroot)/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$PWD/target/bf16-observations}"
+export CARGO_PROFILE_DEV_DEBUG=0
+export CARGO_PROFILE_TEST_DEBUG=0
+"$CARGO" fetch --locked
+"$CARGO" fetch --locked --manifest-path examples/tiled_gemm_general_v1/Cargo.toml
+fixtures=examples/tiled_gemm_general_v1/simulation
+mkdir -p target/bf16-results
+
+for variant in tile simt; do
+  selection=(--manifest-path examples/tiled_gemm_general_v1/Cargo.toml --lib --offline -j2)
+  if [ "$variant" = simt ]; then
+    selection+=(--no-default-features --features kernel-simt-gemm-general)
+  fi
+  for case in nonquarter cancellation fractional-full; do
+    scripts/quickstart.sh simulate-source \
+      --crate fe2o3_tiled_gemm_general_v1 --target gfx942 --bundle-version 6 \
+      --matrix-bf16-numerics finite-sequential-fma-v1 \
+      --request "$fixtures/$variant-$case.request.json" \
+      --expectation "$fixtures/$variant-$case.expectation.json" \
+      --output "target/bf16-results/$variant-$case.bundle-v6" \
+      -- "${selection[@]}" >"target/bf16-results/$variant-$case.result.json"
+  done
+done
+```
+
+Each invocation exports real source using the maintained
+`fe2o3-export-sim --bundle-version 6`, runs the V6 simulator, and invokes
+`scripts/check-simulation-expectation.py` before publishing result stdout.
+The output bundle paths must not already exist: choose a fresh output
+directory on reruns. Dependencies must already be cached for offline extraction.
+The numerical option changes simulation, not extraction.
+
+Observe the retained SIMT bundles again using the default exact matrix mode,
+then explicitly check full outputs without another extraction:
+
+```bash
+for case in nonquarter cancellation fractional-full; do
+  "$CARGO" run --locked --offline -p fe2o3-kir-sim-cli --bin fe2o3-kir-sim -- \
+    --bundle-v6 "target/bf16-results/simt-$case.bundle-v6" \
+    --matrix-bf16-numerics exact-v1 \
+    --request "$fixtures/simt-$case.request.json" \
+    >"target/bf16-results/simt-$case.exact.result.json"
+  python3 -I -B scripts/check-simulation-expectation.py \
+    --expectation "$fixtures/simt-$case.expectation.json" \
+    --result "target/bf16-results/simt-$case.exact.result.json"
+done
+```
+
+`exact-v1` remains the default. The structured tile refuses these fractional
+matrix operands under that original restricted integral contract.
+`finite-sequential-fma-v1` is an explicit **ordinary observation**: finite raw
+BF16 inputs, soft-float F32 fused multiply-add in increasing K order,
+round-to-nearest ties-even, gradual underflow, and the source epilogue.
+NaN/Inf operands and nonfinite intermediates are refused; the result reports
+the selected mode. This is not native MFMA reduction equivalence, proof
+qualification, protected execution, or the pending legacy V7 tutorial gate.
+The scalar SIMT source retains its own F32 instruction sequence; the matrix
+option does not rewrite it.
+
+### Independent Expected Values
+
+Expectations use exact rational arithmetic on the original raw BF16 inputs,
+not simulator output. All products and partial sums in these cases are exactly
+representable in binary32, so increasing-K FMA and scalar multiply/add agree:
+
+- `nonquarter`: BF16 `3f81 * 3f7f` gives
+  `(129/128)*(255/256) = 32895/32768`, F32 bits `3f807f00`.
+- `cancellation`: `64.5*64.5 + 64*(-65) = 1/4`, bits `3e800000`.
+- `fractional-full`: indices 0..15,
+  `A[r,k]=(128+r+k)/128`, `B[k,c]=(128+2*c-k)/128`.
+  Each output is
+  `(16*(128+r)*(128+2*c)+120*((128+2*c)-(128+r))-1240)/16384`.
+  All 256 outputs are checked, followed by eight unchanged raw `7f800001`
+  canaries, which are not numerical operands.
+
+Each small case also retains one canary. Expectations check unchanged A/B
+bytes, all scalar ABI arguments, complete C bytes, and initialized-byte masks.
+No tolerance can hide changed inputs, missing stores, or canary corruption.
