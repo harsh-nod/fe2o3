@@ -25,6 +25,15 @@ entering the checkout.
 No GPU, KFD device, ROCm runtime, HIP runtime, or HSA runtime is needed for the
 CPU simulator workflow.
 
+A measured CPU-only `no-gpu` run on 2026-10-26 at
+[332658a](https://github.com/harsh-nod/fe2o3/commit/332658add5b8cfb3b2ef0dd1ca736107a947e723)
+used about 17.18 GB of allocated disk across the core and tutorial-site
+checkouts, private Cargo cache, and fresh default build target. The pinned Rust
+compiler was already installed and its storage is excluded. Peak memory was
+about 10 GiB under a 16 GiB execution cap. This is one measured environment,
+not a universal minimum or a GPU result; allow additional space for toolchain
+installation, native products, retained outputs, and later builds.
+
 ## Clone and inspect
 
 ```console
