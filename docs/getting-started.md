@@ -304,6 +304,8 @@ selections, oracle, supported shapes and remaining evidence limits:
 | Example | Maintained setup and commands | Numerical host path |
 | --- | --- | --- |
 | BF16 dynamic strided GEMM | [Run on gfx950](../examples/tiled_gemm_general_v1/README.md#run-on-gfx950), using `run-gfx950.sh` with `simt` and `tile` | Explicit external-HSACO unsafe qualification host |
+| BF16 Flash Attention | [Paired commands](../examples/flash_attention_general_v1/README.md#paired-commands) and [gfx950 setup](../examples/flash_attention_general_v1/GFX950.md), using `run-gfx950.sh` with `simt` and `tile` | Explicit external-HSACO unsafe qualification host |
+| BF16 grouped routed expert | [gfx950 paired commands and setup](../examples/moe_grouped_expert_general_v1/README.md#gfx950-paired-commands), using `run-gfx950.sh` with `simt` and `tile` | Explicit external-HSACO unsafe qualification host |
 | FP8 and FP4 GEMM | [Setup and Rust-to-HSACO runners](../examples/gfx950_low_precision/README.md#setup), using `run-fp8-gemm-gfx950.sh` and `run-fp4-gemm-gfx950.sh` with `simt` and `tile` | Digest-pinned HSA numerical fixtures |
 | F32 vector addition | [Vecadd setup and numerical commands](../examples/vecadd/README.md), using `run-gfx950.sh` with `simt` and `tile` | Digest-pinned HSA numerical fixtures |
 
