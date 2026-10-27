@@ -10,7 +10,6 @@ import stat
 import subprocess
 import sys
 import tempfile
-from types import SimpleNamespace
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -97,32 +96,6 @@ class ProductionProofPipelineTests(unittest.TestCase):
             header,
         )
         self.assertIn("commit label is routing, not an authorization boundary", header)
-
-    def test_authenticated_host_admits_only_canonical_main_push_or_dispatch(self):
-        workflow = (ROOT / ".github/workflows/authenticated-verus-reviewed-host.yml").read_text()
-        self.assertEqual(workflow.count("  reviewed-host:\n"), 1)
-        header = workflow.partition("  reviewed-host:\n")[2].partition("    steps:\n")[0]
-        self.assertEqual(header.count("    if:"), 1)
-        guard = " ".join(header.partition("    if: >-\n")[2].partition("    name:")[0].split())
-        self.assertEqual(guard, "github.repository == 'harsh-nod/fe2o3' && "
-                         "github.ref == 'refs/heads/main' && "
-                         "(github.event_name == 'push' || github.event_name == 'workflow_dispatch')")
-        self.assertIn("    runs-on: [self-hosted, linux, x64, fe2o3-verus-reviewed-host-v1]\n", header)
-        self.assertIn("    timeout-minutes: 45\n", header)
-        self.assertEqual(workflow.count("        run: scripts/ci-authenticated-verus-reviewed-host.sh\n"), 1)
-
-        # Evaluate only the exact equality/boolean expression asserted above.
-        expression = guard.replace("&&", "and").replace("||", "or")
-        for repository in ("harsh-nod/fe2o3", "fork/fe2o3"):
-            for ref in ("refs/heads/main", "refs/heads/topic", "refs/pull/1/merge", "refs/tags/v1"):
-                for event in ("push", "workflow_dispatch", "pull_request", "pull_request_target", "workflow_run"):
-                    with self.subTest(repository=repository, ref=ref, event=event):
-                        github = SimpleNamespace(repository=repository, ref=ref, event_name=event)
-                        admitted = eval(expression, {"__builtins__": {}}, {"github": github})
-                        self.assertEqual(admitted, (repository, ref, event) in {
-                            ("harsh-nod/fe2o3", "refs/heads/main", "push"),
-                            ("harsh-nod/fe2o3", "refs/heads/main", "workflow_dispatch"),
-                        })
 
     def test_workflow_and_local_policy_run_the_maintained_entrypoints(self):
         workflow = (ROOT / ".github/workflows/runtime-model-verus.yml").read_text()

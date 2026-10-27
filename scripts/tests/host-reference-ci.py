@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+from types import SimpleNamespace
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -36,6 +37,32 @@ main "$3"
 
 
 class HostReferenceCiTests(unittest.TestCase):
+    def test_authenticated_host_admits_only_canonical_main_push_or_dispatch(self):
+        workflow = (ROOT / ".github/workflows/authenticated-verus-reviewed-host.yml").read_text()
+        self.assertEqual(workflow.count("  reviewed-host:\n"), 1)
+        header = workflow.partition("  reviewed-host:\n")[2].partition("    steps:\n")[0]
+        self.assertEqual(header.count("    if:"), 1)
+        guard = " ".join(header.partition("    if: >-\n")[2].partition("    name:")[0].split())
+        self.assertEqual(guard, "github.repository == 'harsh-nod/fe2o3' && "
+                         "github.ref == 'refs/heads/main' && "
+                         "(github.event_name == 'push' || github.event_name == 'workflow_dispatch')")
+        self.assertIn("    runs-on: [self-hosted, linux, x64, fe2o3-verus-reviewed-host-v1]\n", header)
+        self.assertIn("    timeout-minutes: 45\n", header)
+        self.assertEqual(workflow.count("        run: scripts/ci-authenticated-verus-reviewed-host.sh\n"), 1)
+
+        # Evaluate only the exact equality/boolean expression asserted above.
+        expression = guard.replace("&&", "and").replace("||", "or")
+        for repository in ("harsh-nod/fe2o3", "fork/fe2o3"):
+            for ref in ("refs/heads/main", "refs/heads/topic", "refs/pull/1/merge", "refs/tags/v1"):
+                for event in ("push", "workflow_dispatch", "pull_request", "pull_request_target", "workflow_run"):
+                    with self.subTest(repository=repository, ref=ref, event=event):
+                        github = SimpleNamespace(repository=repository, ref=ref, event_name=event)
+                        admitted = eval(expression, {"__builtins__": {}}, {"github": github})
+                        self.assertEqual(admitted, (repository, ref, event) in {
+                            ("harsh-nod/fe2o3", "refs/heads/main", "push"),
+                            ("harsh-nod/fe2o3", "refs/heads/main", "workflow_dispatch"),
+                        })
+
     def test_vecadd_summary_matches_declared_fixture_cases(self):
         lines = (ROOT / "examples/verus_vecadd/run-verus.sh").read_text().splitlines()
         positives = sum(line.startswith("run_pass ") for line in lines)
