@@ -316,6 +316,7 @@ selections, oracle, supported shapes and remaining evidence limits:
 | BF16 Flash Attention | [Paired commands](../examples/flash_attention_general_v1/README.md#paired-commands) and [gfx950 setup](../examples/flash_attention_general_v1/GFX950.md), using `run-gfx950.sh` with `simt` and `tile` | Explicit external-HSACO unsafe qualification host |
 | BF16 grouped routed expert | [gfx950 paired commands and setup](../examples/moe_grouped_expert_general_v1/README.md#gfx950-paired-commands), using `run-gfx950.sh` with `simt` and `tile` | Explicit external-HSACO unsafe qualification host |
 | FP8 and FP4 GEMM | [Setup and Rust-to-HSACO runners](../examples/gfx950_low_precision/README.md#setup), using `run-fp8-gemm-gfx950.sh` and `run-fp4-gemm-gfx950.sh` with `simt` and `tile` | Digest-pinned HSA numerical fixtures |
+| FP8 and FP4 attention | [Setup](../examples/gfx950_low_precision/README.md#setup), [FP8 modes](../examples/gfx950_low_precision/README.md#fp8-attention-simt-counterpart) and [FP4 modes](../examples/gfx950_low_precision/README.md#fp4-attention-simt-counterpart), using `run-fp8-attention-gfx950.sh` and `run-fp4-attention-gfx950.sh` with `simt` and `tile` | Digest-pinned HSA numerical fixtures |
 | F32 vector addition | [Vecadd setup and numerical commands](../examples/vecadd/README.md), using `run-gfx950.sh` with `simt` and `tile` | Digest-pinned HSA numerical fixtures |
 
 For these runners, `FE2O3_EXAMPLE_COMPILE_ONLY=1` suppresses GPU execution;
@@ -324,6 +325,18 @@ run. For actual execution, use a physical `gfx950:xnack-` Wave64 device with
 the required access and visibility. An MI300X/gfx942 device, CPU simulation,
 or a target string cannot substitute for that device. Do not run competing
 GPU jobs on a shared device without its owner's execution lease.
+
+These stock hosts open visible HIP ordinal zero. Following the existing
+[runtime selection convention](../crates/fe2o3-hsa-runtime/README.md), set
+`ROCR_VISIBLE_DEVICES` to the single leased physical GPU's decimal index and
+`HIP_VISIBLE_DEVICES=0` to select it inside that restricted view. Do not repeat
+the physical index in `HIP_VISIBLE_DEVICES`, or inherit a conflicting
+`CUDA_VISIBLE_DEVICES` selection. Physical indices are host-specific: confirm
+the selected device's PCI BDF and UUID against the lease, and verify that the
+masked ROCm view contains exactly that one gfx950 GPU before running a kernel.
+An ordinal, an idle-utilization sample, or open render-device descriptors alone
+do not establish exclusive ownership. Visibility filtering is not a lock or
+protected execution authority.
 
 The setup is path-specific. Use the pinned `nightly-2026-04-03` toolchain and
 the selected runner's documented ROCm LLVM/runtime development libraries.
